@@ -1,13 +1,12 @@
 #include "usmart.h"
 #include "usart.h"
-#include "sys.h"
-
+#include "sys.h" 
 //////////////////////////////////////////////////////////////////////////////////	 
 //本程序只供学习使用，未经作者许可，不得用于其它任何用途
 //ALIENTEK STM32开发板	   
 //正点原子@ALIENTEK
 //技术论坛:www.openedv.com 
-//版本：V3.1
+//版本：V3.2
 //版权所有，盗版必究。
 //Copyright(C) 正点原子 2011-2021
 //All rights reserved
@@ -36,7 +35,7 @@
 //3,修改了函数默认显示参数格式的修改方式. 
 //V2.4 20110905
 //1,修改了usmart_get_cmdname函数,增加最大参数长度限制.避免了输入错误参数时的死机现象.
-//2,增加USMART_ENTIM_SCAN宏定义,用于配置是否使用TIM定时执行scan函数.
+//2,增加USMART_ENTIM2_SCAN宏定义,用于配置是否使用TIM2定时执行scan函数.
 //V2.5 20110930
 //1,修改usmart_init函数为void usmart_init(u8 sysclk),可以根据系统频率自动设定扫描时间.(固定100ms)
 //2,去掉了usmart_init函数中的uart_init函数,串口初始化必须在外部初始化,方便用户自行管理.
@@ -59,13 +58,11 @@
 //发送:runtime 1 ,则开启函数执行时间统计功能
 //发送:runtime 0 ,则关闭函数执行时间统计功能
 ///runtime统计功能,必须设置:USMART_ENTIMX_SCAN 为1,才可以使用!!
+//V3.2 20140828
+//1,修改usmart_get_aparm函数,加入+/-符号的支持
+//2,修改usmart_str2num函数,支持负数转换
 /////////////////////////////////////////////////////////////////////////////////////
-//USMART资源占用情况@MDK 3.80A@2.0版本：
-//FLASH:4K~K字节(通过USMART_USE_HELP和USMART_USE_WRFUNS设置)
-//SRAM:72字节(最少的情况下)
-//SRAM计算公式:   SRAM=PARM_LEN+72-4  其中PARM_LEN必须大于等于4.
-//应该保证堆栈不小于100个字节.
-////////////////////////////////////////////用户配置参数////////////////////////////////////////////////////	  
+  
 //系统命令
 u8 *sys_cmd_tab[]=
 {
@@ -98,15 +95,15 @@ u8 usmart_sys_cmd_exe(u8 *str)
 		case 0:
 		case 1://帮助指令
 			printf("\r\n");
-#if USMART_USE_HELP
-			printf("------------------------USMART V3.1------------------------ \r\n");
+#if USMART_USE_HELP 
+			printf("------------------------USMART V3.2------------------------ \r\n");
 			printf("    USMART是由ALIENTEK开发的一个灵巧的串口调试互交组件,通过 \r\n");
 			printf("它,你可以通过串口助手调用程序里面的任何函数,并执行.因此,你可\r\n");
-			printf("以随意更改函数的输入参数(支持数字(10/16进制)、字符串、函数入\r\n");	  
-			printf("口地址等作为参数),单个函数最多支持10个输入参数,并支持函数返 \r\n");
-			printf("回值显示.新增参数显示进制设置功能,新增进制转换功能.\r\n");
+			printf("以随意更改函数的输入参数(支持数字(10/16进制,支持负数)、字符串\r\n"),
+			printf("、函数入口地址等作为参数),单个函数最多支持10个输入参数,并支持\r\n"),  
+			printf("函数返回值显示.支持参数显示进制设置功能,支持进制转换功能.\r\n");
 			printf("技术支持:www.openedv.com\r\n");
-			printf("USMART有7个系统命令:\r\n");
+			printf("USMART有7个系统命令(必须小写):\r\n");
 			printf("?:      获取帮助信息\r\n");
 			printf("help:   获取帮助信息\r\n");
 			printf("list:   可用的函数列表\r\n\n");
@@ -226,27 +223,27 @@ u32 usmart_get_runtime(void)
 	}
 	usmart_dev.runtime+=TIM4->CNT;
 	return usmart_dev.runtime;		//返回计数值
-}
+}  
 //下面这两个函数,非USMART函数,放到这里,仅仅方便移植. 
 //定时器4中断服务程序	 
 void TIM4_IRQHandler(void)
 { 		    		  			    
 	if(TIM4->SR&0X0001)//溢出中断
-	{ 
+	{
 		usmart_dev.scan();	//执行usmart扫描	
 		TIM4->CNT=0;		//清空定时器的CNT
-		TIM4->ARR=1000;		//恢复原来的设置
+		TIM4->ARR=1000;		//恢复原来的设置		    				   				     	    	
 	}				   
 	TIM4->SR&=~(1<<0);//清除中断标志位 	    
 }
 //使能定时器4,使能中断.
 void Timer4_Init(u16 arr,u16 psc)
 {
-	RCC->APB1ENR|=1<<2;	//TIM4时钟使能    
- 	TIM4->ARR=arr;  	//设定计数器自动重装值  
-	TIM4->PSC=psc;  	//预分频器7200,得到10Khz的计数时钟	
-	TIM4->DIER|=1<<0;   //允许更新中断			  							    
-	TIM4->CR1|=0x01;    //使能定时器2
+	RCC->APB1ENR|=1<<2;   	//TIM4 时钟使能      
+ 	TIM4->ARR=arr;  		//设定计数器自动重装值  
+	TIM4->PSC=psc;  		//预分频器7200,得到10Khz的计数时钟 
+	TIM4->DIER|=1<<0;   	//允许更新中断	 
+	TIM4->CR1|=0x01;    	//使能定时器4
   	MY_NVIC_Init(3,3,TIM4_IRQn,2);//抢占3，子优先级3，组2(组2中优先级最低的)									 
 }
 #endif
@@ -296,7 +293,7 @@ u8 usmart_cmd_rec(u8*str)
 void usmart_exe(void)
 {
 	u8 id,i;
-	u32 res=0;		   
+	u32 res;		   
 	u32 temp[MAX_PARM];//参数转换,使之支持了字符串 
 	u8 sfname[MAX_FNAME_LEN];//存放本地函数名
 	u8 pnum,rval;
@@ -315,7 +312,7 @@ void usmart_exe(void)
 		}else						  //参数是数字
 		{
 			temp[i]=*(u32*)(usmart_dev.parm+usmart_get_parmpos(i));
-			if(usmart_dev.sptype==SP_TYPE_DEC)printf("%lu",temp[i]);//10进制参数显示
+			if(usmart_dev.sptype==SP_TYPE_DEC)printf("%ld",temp[i]);//10进制参数显示
 			else printf("0X%X",temp[i]);//16进制参数显示 	   
 		}
 		if(i!=pnum-1)printf(",");

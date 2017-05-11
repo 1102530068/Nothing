@@ -5,7 +5,7 @@
 //ALIENTEK STM32开发板	   
 //正点原子@ALIENTEK
 //技术论坛:www.openedv.com 
-//版本：V3.1
+//版本：V3.2
 //版权所有，盗版必究。
 //Copyright(C) 正点原子 2011-2021
 //All rights reserved
@@ -34,7 +34,7 @@
 //3,修改了函数默认显示参数格式的修改方式. 
 //V2.4 20110905
 //1,修改了usmart_get_cmdname函数,增加最大参数长度限制.避免了输入错误参数时的死机现象.
-//2,增加USMART_ENTIM_SCAN宏定义,用于配置是否使用TIM定时执行scan函数.
+//2,增加USMART_ENTIM2_SCAN宏定义,用于配置是否使用TIM2定时执行scan函数.
 //V2.5 20110930
 //1,修改usmart_init函数为void usmart_init(u8 sysclk),可以根据系统频率自动设定扫描时间.(固定100ms)
 //2,去掉了usmart_init函数中的uart_init函数,串口初始化必须在外部初始化,方便用户自行管理.
@@ -57,13 +57,10 @@
 //发送:runtime 1 ,则开启函数执行时间统计功能
 //发送:runtime 0 ,则关闭函数执行时间统计功能
 ///runtime统计功能,必须设置:USMART_ENTIMX_SCAN 为1,才可以使用!!
+//V3.2 20140828
+//1,修改usmart_get_aparm函数,加入+/-符号的支持
+//2,修改usmart_str2num函数,支持负数转换
 /////////////////////////////////////////////////////////////////////////////////////
-//USMART资源占用情况@MDK 3.80A@2.0版本：
-//FLASH:4K~K字节(通过USMART_USE_HELP和USMART_USE_WRFUNS设置)
-//SRAM:72字节(最少的情况下)
-//SRAM计算公式:   SRAM=PARM_LEN+72-4  其中PARM_LEN必须大于等于4.
-//应该保证堆栈不小于100个字节.
-////////////////////////////////////////////用户配置参数////////////////////////////////////////////////////	  
   
 //对比字符串str1和str2
 //*str1:字符串1指针
@@ -117,7 +114,7 @@ u32 usmart_pow(u8 m,u8 n)
 }	    
 //把字符串转为数字
 //支持16进制转换,但是16进制字母必须是大写的,且格式为以0X开头的.
-//不支持负数 
+//支持负数 
 //*str:数字字符串指针
 //*res:转换完的结果存放地址.
 //返回值:0，成功转换完成.其他,错误代码.
@@ -125,17 +122,21 @@ u32 usmart_pow(u8 m,u8 n)
 u8 usmart_str2num(u8*str,u32 *res)
 {
 	u32 t;
-	u8 bnum=0;	//数字的位数
+	int tnum;
+	u8 bnum=0;		//数字的位数
 	u8 *p;		  
-	u8 hexdec=10;//默认为十进制数据
+	u8 hexdec=10;	//默认为十进制数据
+	u8 flag=0;		//0,没有符号标记;1,表示正数;2,表示负数.
 	p=str;
 	*res=0;//清零.
 	while(1)
 	{
-		if((*p<='9'&&*p>='0')||(*p<='F'&&*p>='A')||(*p=='X'&&bnum==1))//参数合法
+		if((*p<='9'&&*p>='0')||((*str=='-'||*str=='+')&&bnum==0)||(*p<='F'&&*p>='A')||(*p=='X'&&bnum==1))//参数合法
 		{
 			if(*p>='A')hexdec=16;	//字符串中存在字母,为16进制格式.
-			bnum++;					//位数增加.
+			if(*str=='-'){flag=2;str+=1;}//偏移掉符号
+			else if(*str=='+'){flag=1;str+=1;}//偏移掉符号
+			else bnum++;			//位数增加.
 		}else if(*p=='\0')break;	//碰到结束符,退出.
 		else return 1;				//不全是十进制或者16进制数据.
 		p++; 
@@ -158,6 +159,11 @@ u8 usmart_str2num(u8*str,u32 *res)
 		*res+=t*usmart_pow(hexdec,bnum);		   
 		p++;
 		if(*p=='\0')break;//数据都查完了.	
+	}
+	if(flag==2)//是负数?
+	{	
+		tnum=-*res; 
+		*res=tnum;
 	}
 	return 0;//成功转换
 }
@@ -316,7 +322,7 @@ u8 usmart_get_aparm(u8 *str,u8 *fparm,u8 *ptype)
 		if((*str==')'||*str=='\0')&&string==0)break;//立即退出标识符
 		if(type==0)//默认是数字的
 		{
-			if((*str>='0' && *str<='9')||(*str>='a' && *str<='f')||(*str>='A' && *str<='F')||*str=='X'||*str=='x')//数字串检测
+			if((*str>='0' && *str<='9')||*str=='-'||*str=='+'||(*str>='a' && *str<='f')||(*str>='A' && *str<='F')||*str=='X'||*str=='x')//数字串检测
 			{
 				if(enout)break;					//找到了下一个参数,直接退出.
 				if(*str>='a')*fparm=*str-0X20;	//小写转换为大写

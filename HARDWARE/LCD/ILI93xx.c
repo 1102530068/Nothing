@@ -1,20 +1,20 @@
 #include "lcd.h"
 #include "stdlib.h"
 #include "font.h" 
-#include "usart.h"
-#include "delay.h"	 
+#include "usart.h"	 
+#include "delay.h"	   
 //////////////////////////////////////////////////////////////////////////////////	 
 //本程序只供学习使用，未经作者许可，不得用于其它任何用途
-//ALIENTEK战舰STM32开发板
-//2.4寸/2.8寸/3.5寸/4.3寸 TFT液晶驱动	  
+//ALIENTEK STM32F103开发板
+//2.4寸/2.8寸/3.5寸/4.3寸/7寸 TFT液晶驱动	  
 //支持驱动IC型号包括:ILI9341/ILI9325/RM68042/RM68021/ILI9320/ILI9328/LGDP4531/LGDP4535/
-//                  SPFD5408/SSD1289/1505/B505/C505/NT35310/NT35510等		    
+//                  SPFD5408/1505/B505/C505/NT35310/NT35510/SSD1963等		    
 //正点原子@ALIENTEK
 //技术论坛:www.openedv.com
-//修改日期:2014/7/10
-//版本：V2.6
+//创建日期:2010/7/4
+//版本：V3.0
 //版权所有，盗版必究。
-//Copyright(C) 广州市星翼电子科技有限公司 2009-2019
+//Copyright(C) 广州市星翼电子科技有限公司 2014-2024
 //All rights reserved	
 //********************************************************************************
 //V1.2修改说明
@@ -57,99 +57,81 @@
 //2,新增LCD_Set_Window函数,用于设置窗口,对快速填充,比较有用,但是该函数在横屏时,不支持6804.
 //V2.5 20140211
 //1,新增NT35510（ID:5510）驱动器的支持
-//V2.6 20140710
-//1,修正LCD_Scan_Dir横屏时设置的扫描方式显示不全的bug.
+//V2.6 20140504
+//1,新增ASCII 24*24字体的支持(更多字体用户可以自行添加)  
+//2,修改部分函数参数,以支持MDK -O2优化
+//3,针对9341/35310/35510,写时间设置为最快,尽可能的提高速度
+//4,去掉了SSD1289的支持,因为1289实在是太慢了,读周期要1us...简直奇葩.不适合F4使用
+//5,修正68042及C505等IC的读颜色函数的bug.
+//V2.7 20140710
+//1,修正LCD_Color_Fill函数的一个bug. 
+//2,修正LCD_Scan_Dir函数的一个bug.
+//V2.8 20140721
+//1,解决MDK使用-O2优化时LCD_ReadPoint函数读点失效的问题.
+//2,修正LCD_Scan_Dir横屏时设置的扫描方式显示不全的bug.
+//V2.9 20141130
+//1,新增对SSD1963 LCD的支持.
+//2,新增LCD_SSD_BackLightSet函数
+//3,取消ILI93XX的Rxx寄存器定义
+//V3.0 20150423
+//修改SSD1963 LCD屏的驱动参数.
 //////////////////////////////////////////////////////////////////////////////////	 
 
-//void JTAG_Set(u8 mode)
-//{
-//	u32 temp;
-//	temp=mode;
-//	temp<<=25;
-//	RCC->APB2ENR|=1<<0;     //开启辅助时钟	   
-//	AFIO->MAPR&=0XF8FFFFFF; //清除MAPR的[26:24]
-//	AFIO->MAPR|=temp;       //设置jtag模式
-//} 
 //LCD的画笔颜色和背景色	   
 u16 POINT_COLOR=0x0000;	//画笔颜色
 u16 BACK_COLOR=0xFFFF;  //背景色 
-
+  
 //管理LCD重要参数
 //默认为竖屏
 _lcd_dev lcddev;
-	 					    
+	 
 //写寄存器函数
-//data:寄存器值
-void LCD_WR_REG(u16 data)
-{ 
-	LCD_RS_CLR;//写地址  
- 	LCD_CS_CLR; 
-	DATAOUT(data); 
-	LCD_WR_CLR; 
-	LCD_WR_SET; 
- 	LCD_CS_SET;   
+//regval:寄存器值
+void LCD_WR_REG(u16 regval)
+{   
+	LCD->LCD_REG=regval;//写入要写的寄存器序号	 
 }
-//写数据函数
-//可以替代LCD_WR_DATAX宏,拿时间换空间.
-//data:寄存器值
-void LCD_WR_DATAX(u16 data)
-{
-	LCD_RS_SET;
-	LCD_CS_CLR;
-	DATAOUT(data);
-	LCD_WR_CLR;
-	LCD_WR_SET;
-	LCD_CS_SET;
+//写LCD数据
+//data:要写入的值
+void LCD_WR_DATA(u16 data)
+{	 
+	LCD->LCD_RAM=data;		 
 }
 //读LCD数据
 //返回值:读到的值
 u16 LCD_RD_DATA(void)
-{										   
-	u16 t;
- 	GPIOB->CRL=0X88888888; //PB0-7  上拉输入
-	GPIOB->CRH=0X88888888; //PB8-15 上拉输入
-	GPIOB->ODR=0X0000;     //全部输出0
-
-	LCD_RS_SET;
-	LCD_CS_CLR;
-	//读取数据(读寄存器时,并不需要读2次)
-	LCD_RD_CLR;
-	if(lcddev.id==0X8989)delay_us(2);//FOR 8989,延时2us					   
-	t=DATAIN;  
-	LCD_RD_SET;
-	LCD_CS_SET; 
-
-	GPIOB->CRL=0X33333333; //PB0-7  上拉输出
-	GPIOB->CRH=0X33333333; //PB8-15 上拉输出
-	GPIOB->ODR=0XFFFF;    //全部输出高
-	return t;  
-}
+{
+	vu16 ram;			//防止被优化
+	ram=LCD->LCD_RAM;	
+	return ram;	 
+}					   
 //写寄存器
-//LCD_Reg:寄存器编号
-//LCD_RegValue:要写入的值
+//LCD_Reg:寄存器地址
+//LCD_RegValue:要写入的数据
 void LCD_WriteReg(u16 LCD_Reg,u16 LCD_RegValue)
 {	
-	LCD_WR_REG(LCD_Reg);  
-	LCD_WR_DATA(LCD_RegValue);	    		 
-}   
+	LCD->LCD_REG = LCD_Reg;		//写入要写的寄存器序号	 
+	LCD->LCD_RAM = LCD_RegValue;//写入数据	    		 
+}	   
 //读寄存器
-//LCD_Reg:寄存器编号
-//返回值:读到的值
+//LCD_Reg:寄存器地址
+//返回值:读到的数据
 u16 LCD_ReadReg(u16 LCD_Reg)
 {										   
- 	LCD_WR_REG(LCD_Reg);  //写入要读的寄存器号  
-	return LCD_RD_DATA(); 
-} 
+	LCD_WR_REG(LCD_Reg);		//写入要读的寄存器序号
+	delay_us(5);		  
+	return LCD_RD_DATA();		//返回读到的值
+}   
 //开始写GRAM
 void LCD_WriteRAM_Prepare(void)
 {
-	LCD_WR_REG(lcddev.wramcmd);
-} 
+ 	LCD->LCD_REG=lcddev.wramcmd;	  
+}	 
 //LCD写GRAM
 //RGB_Code:颜色值
 void LCD_WriteRAM(u16 RGB_Code)
 {							    
-	LCD_WR_DATA(RGB_Code);//写十六位GRAM
+	LCD->LCD_RAM = RGB_Code;//写十六位GRAM
 }
 //从ILI93xx读出的数据为GBR格式，而我们写入的时候为RGB格式。
 //通过该函数转换
@@ -163,118 +145,114 @@ u16 LCD_BGR2RGB(u16 c)
 	r=(c>>11)&0x1f;	 
 	rgb=(b<<11)+(g<<5)+(r<<0);		 
 	return(rgb);
-}		 
+} 
+//当mdk -O1时间优化时需要设置
+//延时i
+void opt_delay(u8 i)
+{
+	while(i--);
+}
 //读取个某点的颜色值	 
 //x,y:坐标
 //返回值:此点的颜色
 u16 LCD_ReadPoint(u16 x,u16 y)
 {
- 	u16 r,g,b;
+ 	u16 r=0,g=0,b=0;
 	if(x>=lcddev.width||y>=lcddev.height)return 0;	//超过了范围,直接返回		   
-	LCD_SetCursor(x,y);
-	if(lcddev.id==0X9341||lcddev.id==0X6804||lcddev.id==0X5310)LCD_WR_REG(0X2E);	//9341/6804/5310发送读GRAM指令
+	LCD_SetCursor(x,y);	    
+	if(lcddev.id==0X9341||lcddev.id==0X6804||lcddev.id==0X5310||lcddev.id==0X1963)LCD_WR_REG(0X2E);//9341/6804/3510/1963 发送读GRAM指令
 	else if(lcddev.id==0X5510)LCD_WR_REG(0X2E00);	//5510 发送读GRAM指令
-	else LCD_WR_REG(R34);      		 		//其他IC发送读GRAM指令
-	GPIOB->CRL=0X88888888; //PB0-7  上拉输入
-	GPIOB->CRH=0X88888888; //PB8-15 上拉输入
-	GPIOB->ODR=0XFFFF;     //全部输出高
-
-	LCD_RS_SET;
-	LCD_CS_CLR;	    
-	//读取数据(读GRAM时,第一次为假读)	
-	LCD_RD_CLR;	
-  	delay_us(1);//延时1us					   
-	LCD_RD_SET;
- 	//dummy READ
-	LCD_RD_CLR;					   
-	delay_us(1);//延时1us					   
- 	r=DATAIN;  	//实际坐标颜色
-	LCD_RD_SET;
- 	if(lcddev.id==0X9341||lcddev.id==0X5310||lcddev.id==0X5510)	//9341/NT35310/NT35510要分2次读出
-	{	 
-		LCD_RD_CLR;					   
-		b=DATAIN;//读取蓝色值  	  
-	 	LCD_RD_SET;
-		g=r&0XFF;//对于9341,第一次读取的是RG的值,R在前,G在后,各占8位
+	else LCD_WR_REG(0X22);      		 			//其他IC发送读GRAM指令
+	if(lcddev.id==0X9320)opt_delay(2);				//FOR 9320,延时2us	    
+ 	r=LCD_RD_DATA();								//dummy Read	   
+	if(lcddev.id==0X1963)return r;					//1963直接读就可以 
+	opt_delay(2);	  
+ 	r=LCD_RD_DATA();  		  						//实际坐标颜色
+ 	if(lcddev.id==0X9341||lcddev.id==0X5310||lcddev.id==0X5510)		//9341/NT35310/NT35510要分2次读出
+ 	{
+		opt_delay(2);	  
+		b=LCD_RD_DATA(); 
+		g=r&0XFF;		//对于9341/5310/5510,第一次读取的是RG的值,R在前,G在后,各占8位
 		g<<=8;
-	}else if(lcddev.id==0X6804)
-	{
-		LCD_RD_CLR;					   
-	 	LCD_RD_SET;
-		r=DATAIN;//6804第二次读取的才是真实值 
-	}	 
-	LCD_CS_SET;
-	GPIOB->CRL=0X33333333; 		//PB0-7  上拉输出
-	GPIOB->CRH=0X33333333; 		//PB8-15 上拉输出
-	GPIOB->ODR=0XFFFF;    		//全部输出高  
-	if(lcddev.id==0X9325||lcddev.id==0X4535||lcddev.id==0X4531||lcddev.id==0X8989||lcddev.id==0XB505)return r;	//这几种IC直接返回颜色值
+	} 
+	if(lcddev.id==0X9325||lcddev.id==0X4535||lcddev.id==0X4531||lcddev.id==0XB505||lcddev.id==0XC505)return r;	//这几种IC直接返回颜色值
 	else if(lcddev.id==0X9341||lcddev.id==0X5310||lcddev.id==0X5510)return (((r>>11)<<11)|((g>>10)<<5)|(b>>11));//ILI9341/NT35310/NT35510需要公式转换一下
-	else return LCD_BGR2RGB(r);	//其他IC
-}
+	else return LCD_BGR2RGB(r);						//其他IC
+}			 
 //LCD开启显示
 void LCD_DisplayOn(void)
-{	
-	if(lcddev.id==0X9341||lcddev.id==0X6804||lcddev.id==0X5310)LCD_WR_REG(0X29);	//开启显示
+{					   
+	if(lcddev.id==0X9341||lcddev.id==0X6804||lcddev.id==0X5310||lcddev.id==0X1963)LCD_WR_REG(0X29);	//开启显示
 	else if(lcddev.id==0X5510)LCD_WR_REG(0X2900);	//开启显示
-	else LCD_WriteReg(R7,0x0173); 			//开启显示
+	else LCD_WriteReg(0X07,0x0173); 				 	//开启显示
 }	 
 //LCD关闭显示
 void LCD_DisplayOff(void)
 {	   
-	if(lcddev.id==0X9341||lcddev.id==0X6804||lcddev.id==0X5310)LCD_WR_REG(0X28);	//关闭显示
+	if(lcddev.id==0X9341||lcddev.id==0X6804||lcddev.id==0X5310||lcddev.id==0X1963)LCD_WR_REG(0X28);	//关闭显示
 	else if(lcddev.id==0X5510)LCD_WR_REG(0X2800);	//关闭显示
-	else LCD_WriteReg(R7, 0x0);//关闭显示 
+	else LCD_WriteReg(0X07,0x0);//关闭显示 
 }   
 //设置光标位置
 //Xpos:横坐标
 //Ypos:纵坐标
 void LCD_SetCursor(u16 Xpos, u16 Ypos)
-{
+{	 
  	if(lcddev.id==0X9341||lcddev.id==0X5310)
 	{		    
 		LCD_WR_REG(lcddev.setxcmd); 
-		LCD_WR_DATA(Xpos>>8); 
-		LCD_WR_DATA(Xpos&0XFF);	 
+		LCD_WR_DATA(Xpos>>8);LCD_WR_DATA(Xpos&0XFF); 			 
 		LCD_WR_REG(lcddev.setycmd); 
-		LCD_WR_DATA(Ypos>>8); 
-		LCD_WR_DATA(Ypos&0XFF);
+		LCD_WR_DATA(Ypos>>8);LCD_WR_DATA(Ypos&0XFF); 		
 	}else if(lcddev.id==0X6804)
 	{
 		if(lcddev.dir==1)Xpos=lcddev.width-1-Xpos;//横屏时处理
 		LCD_WR_REG(lcddev.setxcmd); 
-		LCD_WR_DATA(Xpos>>8); 
-		LCD_WR_DATA(Xpos&0XFF);	 
+		LCD_WR_DATA(Xpos>>8);LCD_WR_DATA(Xpos&0XFF); 
 		LCD_WR_REG(lcddev.setycmd); 
-		LCD_WR_DATA(Ypos>>8); 
-		LCD_WR_DATA(Ypos&0XFF);
+		LCD_WR_DATA(Ypos>>8);LCD_WR_DATA(Ypos&0XFF); 
+	}else if(lcddev.id==0X1963)
+	{  			 		
+		if(lcddev.dir==0)//x坐标需要变换
+		{
+			Xpos=lcddev.width-1-Xpos;
+			LCD_WR_REG(lcddev.setxcmd); 
+			LCD_WR_DATA(0);LCD_WR_DATA(0); 		
+			LCD_WR_DATA(Xpos>>8);LCD_WR_DATA(Xpos&0XFF);		 	 
+		}else
+		{
+			LCD_WR_REG(lcddev.setxcmd); 
+			LCD_WR_DATA(Xpos>>8);LCD_WR_DATA(Xpos&0XFF); 		
+			LCD_WR_DATA((lcddev.width-1)>>8);LCD_WR_DATA((lcddev.width-1)&0XFF);		 	 			
+		}	
+		LCD_WR_REG(lcddev.setycmd); 
+		LCD_WR_DATA(Ypos>>8);LCD_WR_DATA(Ypos&0XFF); 		
+		LCD_WR_DATA((lcddev.height-1)>>8);LCD_WR_DATA((lcddev.height-1)&0XFF); 			 		
+		
 	}else if(lcddev.id==0X5510)
 	{
-		LCD_WR_REG(lcddev.setxcmd); 
-		LCD_WR_DATA(Xpos>>8); 
-		LCD_WR_REG(lcddev.setxcmd+1); 
-		LCD_WR_DATA(Xpos&0XFF);	 
-		LCD_WR_REG(lcddev.setycmd); 
-		LCD_WR_DATA(Ypos>>8); 
-		LCD_WR_REG(lcddev.setycmd+1); 
-		LCD_WR_DATA(Ypos&0XFF);		
+		LCD_WR_REG(lcddev.setxcmd);LCD_WR_DATA(Xpos>>8); 		
+		LCD_WR_REG(lcddev.setxcmd+1);LCD_WR_DATA(Xpos&0XFF);			 
+		LCD_WR_REG(lcddev.setycmd);LCD_WR_DATA(Ypos>>8);  		
+		LCD_WR_REG(lcddev.setycmd+1);LCD_WR_DATA(Ypos&0XFF);			
 	}else
 	{
 		if(lcddev.dir==1)Xpos=lcddev.width-1-Xpos;//横屏其实就是调转x,y坐标
 		LCD_WriteReg(lcddev.setxcmd, Xpos);
 		LCD_WriteReg(lcddev.setycmd, Ypos);
-	}	 	 
-}
+	}	 
+} 		 
 //设置LCD的自动扫描方向
 //注意:其他函数可能会受到此函数设置的影响(尤其是9341/6804这两个奇葩),
 //所以,一般设置为L2R_U2D即可,如果设置为其他扫描方式,可能导致显示不正常.
 //dir:0~7,代表8个方向(具体定义见lcd.h)
-//9320/9325/9328/4531/4535/1505/b505/8989/5408/9341/5310/5510等IC已经实际测试	   	   
+//9320/9325/9328/4531/4535/1505/b505/5408/9341/5310/5510/1963等IC已经实际测试	   	   
 void LCD_Scan_Dir(u8 dir)
 {
 	u16 regval=0;
 	u16 dirreg=0;
 	u16 temp;  
-	if(lcddev.dir==1&&lcddev.id!=0X6804)//横屏时，对6804不改变扫描方向！
+	if((lcddev.dir==1&&lcddev.id!=0X6804&&lcddev.id!=0X1963)||(lcddev.dir==0&&lcddev.id==0X1963))//横屏时，对6804和1963不改变扫描方向！竖屏时1963改变方向
 	{			   
 		switch(dir)//方向转换
 		{
@@ -287,8 +265,8 @@ void LCD_Scan_Dir(u8 dir)
 			case 6:dir=3;break;
 			case 7:dir=2;break;	     
 		}
-	}
-	if(lcddev.id==0x9341||lcddev.id==0X6804||lcddev.id==0X5310||lcddev.id==0X5510)//9341/6804/5310/5510,很特殊
+	} 
+	if(lcddev.id==0x9341||lcddev.id==0X6804||lcddev.id==0X5310||lcddev.id==0X5510||lcddev.id==0X1963)//9341/6804/5310/5510/1963,特殊处理
 	{
 		switch(dir)
 		{
@@ -319,26 +297,29 @@ void LCD_Scan_Dir(u8 dir)
 		}
 		if(lcddev.id==0X5510)dirreg=0X3600;
 		else dirreg=0X36;
- 		if((lcddev.id!=0X5310)&&(lcddev.id!=0X5510))regval|=0X08;//5310/5510不需要BGR   
+ 		if((lcddev.id!=0X5310)&&(lcddev.id!=0X5510)&&(lcddev.id!=0X1963))regval|=0X08;//5310/5510/1963不需要BGR   
 		if(lcddev.id==0X6804)regval|=0x02;//6804的BIT6和9341的反了	   
 		LCD_WriteReg(dirreg,regval);
- 		if(regval&0X20)
+		if(lcddev.id!=0X1963)//1963不做坐标处理
 		{
-			if(lcddev.width<lcddev.height)//交换X,Y
+			if(regval&0X20)
 			{
-				temp=lcddev.width;
-				lcddev.width=lcddev.height;
-				lcddev.height=temp;
- 			}
-		}else  
-		{
-			if(lcddev.width>lcddev.height)//交换X,Y
+				if(lcddev.width<lcddev.height)//交换X,Y
+				{
+					temp=lcddev.width;
+					lcddev.width=lcddev.height;
+					lcddev.height=temp;
+				}
+			}else  
 			{
-				temp=lcddev.width;
-				lcddev.width=lcddev.height;
-				lcddev.height=temp;
- 			}
-		}  
+				if(lcddev.width>lcddev.height)//交换X,Y
+				{
+					temp=lcddev.width;
+					lcddev.width=lcddev.height;
+					lcddev.height=temp;
+				}
+			}  
+		}
 		if(lcddev.id==0X5510)
 		{
 			LCD_WR_REG(lcddev.setxcmd);LCD_WR_DATA(0); 
@@ -386,19 +367,12 @@ void LCD_Scan_Dir(u8 dir)
 			case D2U_R2L://从下到上,从右到左
 				regval|=(0<<5)|(0<<4)|(1<<3); 
 				break;	 
-		}
-		if(lcddev.id==0x8989)//8989 IC
-		{
-			dirreg=0X11;
-			regval|=0X6040;	//65K   
-	 	}else//其他驱动IC		  
-		{
-			dirreg=0X03;
-			regval|=1<<12;  
-		}
+		} 
+		dirreg=0X03;
+		regval|=1<<12; 
 		LCD_WriteReg(dirreg,regval);
 	}
-}   
+}     
 //画点
 //x,y:坐标
 //POINT_COLOR:此点的颜色
@@ -406,8 +380,8 @@ void LCD_DrawPoint(u16 x,u16 y)
 {
 	LCD_SetCursor(x,y);		//设置光标位置 
 	LCD_WriteRAM_Prepare();	//开始写入GRAM
-	LCD_WR_DATA(POINT_COLOR); 
-}  	 
+	LCD->LCD_RAM=POINT_COLOR; 
+}
 //快速画点
 //x,y:坐标
 //color:颜色
@@ -416,40 +390,53 @@ void LCD_Fast_DrawPoint(u16 x,u16 y,u16 color)
 	if(lcddev.id==0X9341||lcddev.id==0X5310)
 	{
 		LCD_WR_REG(lcddev.setxcmd); 
-		LCD_WR_DATA(x>>8); 
-		LCD_WR_DATA(x&0XFF);	 
+		LCD_WR_DATA(x>>8);LCD_WR_DATA(x&0XFF);  			 
 		LCD_WR_REG(lcddev.setycmd); 
-		LCD_WR_DATA(y>>8); 
-		LCD_WR_DATA(y&0XFF);
+		LCD_WR_DATA(y>>8);LCD_WR_DATA(y&0XFF); 		 	 
 	}else if(lcddev.id==0X5510)
 	{
 		LCD_WR_REG(lcddev.setxcmd);LCD_WR_DATA(x>>8);  
 		LCD_WR_REG(lcddev.setxcmd+1);LCD_WR_DATA(x&0XFF);	  
 		LCD_WR_REG(lcddev.setycmd);LCD_WR_DATA(y>>8);  
 		LCD_WR_REG(lcddev.setycmd+1);LCD_WR_DATA(y&0XFF); 
+	}else if(lcddev.id==0X1963)
+	{
+		if(lcddev.dir==0)x=lcddev.width-1-x;
+		LCD_WR_REG(lcddev.setxcmd); 
+		LCD_WR_DATA(x>>8);LCD_WR_DATA(x&0XFF); 		
+		LCD_WR_DATA(x>>8);LCD_WR_DATA(x&0XFF); 		
+		LCD_WR_REG(lcddev.setycmd); 
+		LCD_WR_DATA(y>>8);LCD_WR_DATA(y&0XFF); 		
+		LCD_WR_DATA(y>>8);LCD_WR_DATA(y&0XFF); 		
 	}else if(lcddev.id==0X6804)
 	{		    
 		if(lcddev.dir==1)x=lcddev.width-1-x;//横屏时处理
 		LCD_WR_REG(lcddev.setxcmd); 
-		LCD_WR_DATA(x>>8); 
-		LCD_WR_DATA(x&0XFF);	 
+		LCD_WR_DATA(x>>8);LCD_WR_DATA(x&0XFF);			 
 		LCD_WR_REG(lcddev.setycmd); 
-		LCD_WR_DATA(y>>8); 
-		LCD_WR_DATA(y&0XFF);
+		LCD_WR_DATA(y>>8);LCD_WR_DATA(y&0XFF); 		
 	}else
 	{
  		if(lcddev.dir==1)x=lcddev.width-1-x;//横屏其实就是调转x,y坐标
 		LCD_WriteReg(lcddev.setxcmd,x);
 		LCD_WriteReg(lcddev.setycmd,y);
-	}	
-	LCD_RS_CLR;
- 	LCD_CS_CLR; 
-	DATAOUT(lcddev.wramcmd);//写指令  
-	LCD_WR_CLR; 
-	LCD_WR_SET; 
- 	LCD_CS_SET; 
-	LCD_WR_DATA(color);		//写数据
+	}			 
+	LCD->LCD_REG=lcddev.wramcmd; 
+	LCD->LCD_RAM=color; 
+}	 
+//SSD1963 背光设置
+//pwm:背光等级,0~100.越大越亮.
+void LCD_SSD_BackLightSet(u8 pwm)
+{	
+	LCD_WR_REG(0xBE);	//配置PWM输出
+	LCD_WR_DATA(0x05);	//1设置PWM频率
+	LCD_WR_DATA(pwm*2.55);//2设置PWM占空比
+	LCD_WR_DATA(0x01);	//3设置C
+	LCD_WR_DATA(0xFF);	//4设置D
+	LCD_WR_DATA(0x00);	//5设置E
+	LCD_WR_DATA(0x00);	//6设置F
 }
+
 //设置LCD显示方向
 //dir:0,竖屏；1,横屏
 void LCD_Display_Dir(u8 dir)
@@ -469,11 +456,6 @@ void LCD_Display_Dir(u8 dir)
 				lcddev.width=320;
 				lcddev.height=480;
 			}
-		}else if(lcddev.id==0X8989)
-		{
-			lcddev.wramcmd=R34;
-	 		lcddev.setxcmd=0X4E;
-			lcddev.setycmd=0X4F;  
 		}else if(lcddev.id==0x5510)
 		{
 			lcddev.wramcmd=0X2C00;
@@ -481,11 +463,18 @@ void LCD_Display_Dir(u8 dir)
 			lcddev.setycmd=0X2B00; 
 			lcddev.width=480;
 			lcddev.height=800;
+		}else if(lcddev.id==0X1963)
+		{
+			lcddev.wramcmd=0X2C;	//设置写入GRAM的指令 
+			lcddev.setxcmd=0X2B;	//设置写X坐标指令
+			lcddev.setycmd=0X2A;	//设置写Y坐标指令
+			lcddev.width=480;		//设置宽度480
+			lcddev.height=800;		//设置高度800  
 		}else
 		{
-			lcddev.wramcmd=R34;
-	 		lcddev.setxcmd=R32;
-			lcddev.setycmd=R33;  
+			lcddev.wramcmd=0X22;
+	 		lcddev.setxcmd=0X20;
+			lcddev.setycmd=0X21;  
 		}
 	}else 				//横屏
 	{	  				
@@ -502,11 +491,6 @@ void LCD_Display_Dir(u8 dir)
  			lcddev.wramcmd=0X2C;
 	 		lcddev.setxcmd=0X2B;
 			lcddev.setycmd=0X2A; 
-		}else if(lcddev.id==0X8989)
-		{
-			lcddev.wramcmd=R34;
-	 		lcddev.setxcmd=0X4F;
-			lcddev.setycmd=0X4E;   
 		}else if(lcddev.id==0x5510)
 		{
 			lcddev.wramcmd=0X2C00;
@@ -514,11 +498,18 @@ void LCD_Display_Dir(u8 dir)
 			lcddev.setycmd=0X2B00; 
 			lcddev.width=800;
 			lcddev.height=480;
+		}else if(lcddev.id==0X1963)
+		{
+			lcddev.wramcmd=0X2C;	//设置写入GRAM的指令 
+			lcddev.setxcmd=0X2A;	//设置写X坐标指令
+			lcddev.setycmd=0X2B;	//设置写Y坐标指令
+			lcddev.width=800;		//设置宽度800
+			lcddev.height=480;		//设置高度480  
 		}else
 		{
-			lcddev.wramcmd=R34;
-	 		lcddev.setxcmd=R33;
-			lcddev.setycmd=R32;  
+			lcddev.wramcmd=0X22;
+	 		lcddev.setxcmd=0X21;
+			lcddev.setycmd=0X20;  
 		}
 		if(lcddev.id==0X6804||lcddev.id==0X5310)
 		{ 	 
@@ -531,63 +522,68 @@ void LCD_Display_Dir(u8 dir)
 //设置窗口,并自动设置画点坐标到窗口左上角(sx,sy).
 //sx,sy:窗口起始坐标(左上角)
 //width,height:窗口宽度和高度,必须大于0!!
-//窗体大小:width*height.
-//68042,横屏时不支持窗口设置!! 
+//窗体大小:width*height. 
 void LCD_Set_Window(u16 sx,u16 sy,u16 width,u16 height)
-{   
+{    
 	u8 hsareg,heareg,vsareg,veareg;
 	u16 hsaval,heaval,vsaval,veaval; 
-	width=sx+width-1;
-	height=sy+height-1;
-	if(lcddev.id==0X9341||lcddev.id==0X5310||lcddev.id==0X6804)//6804横屏不支持
+	u16 twidth,theight;
+	twidth=sx+width-1;
+	theight=sy+height-1;
+	if(lcddev.id==0X9341||lcddev.id==0X5310||lcddev.id==0X6804||(lcddev.dir==1&&lcddev.id==0X1963))
 	{
 		LCD_WR_REG(lcddev.setxcmd); 
 		LCD_WR_DATA(sx>>8); 
 		LCD_WR_DATA(sx&0XFF);	 
-		LCD_WR_DATA(width>>8); 
-		LCD_WR_DATA(width&0XFF);  
+		LCD_WR_DATA(twidth>>8); 
+		LCD_WR_DATA(twidth&0XFF);  
+		LCD_WR_REG(lcddev.setycmd); 
+		LCD_WR_DATA(sy>>8); 
+		LCD_WR_DATA(sy&0XFF); 
+		LCD_WR_DATA(theight>>8); 
+		LCD_WR_DATA(theight&0XFF); 
+	}else if(lcddev.id==0X1963)//1963竖屏特殊处理
+	{
+		sx=lcddev.width-width-sx; 
+		height=sy+height-1; 
+		LCD_WR_REG(lcddev.setxcmd); 
+		LCD_WR_DATA(sx>>8); 
+		LCD_WR_DATA(sx&0XFF);	 
+		LCD_WR_DATA((sx+width-1)>>8); 
+		LCD_WR_DATA((sx+width-1)&0XFF);  
 		LCD_WR_REG(lcddev.setycmd); 
 		LCD_WR_DATA(sy>>8); 
 		LCD_WR_DATA(sy&0XFF); 
 		LCD_WR_DATA(height>>8); 
-		LCD_WR_DATA(height&0XFF); 
+		LCD_WR_DATA(height&0XFF); 		
 	}else if(lcddev.id==0X5510)
 	{
 		LCD_WR_REG(lcddev.setxcmd);LCD_WR_DATA(sx>>8);  
 		LCD_WR_REG(lcddev.setxcmd+1);LCD_WR_DATA(sx&0XFF);	  
-		LCD_WR_REG(lcddev.setxcmd+2);LCD_WR_DATA(width>>8);   
-		LCD_WR_REG(lcddev.setxcmd+3);LCD_WR_DATA(width&0XFF);   
+		LCD_WR_REG(lcddev.setxcmd+2);LCD_WR_DATA(twidth>>8);   
+		LCD_WR_REG(lcddev.setxcmd+3);LCD_WR_DATA(twidth&0XFF);   
 		LCD_WR_REG(lcddev.setycmd);LCD_WR_DATA(sy>>8);   
 		LCD_WR_REG(lcddev.setycmd+1);LCD_WR_DATA(sy&0XFF);  
-		LCD_WR_REG(lcddev.setycmd+2);LCD_WR_DATA(height>>8);   
-		LCD_WR_REG(lcddev.setycmd+3);LCD_WR_DATA(height&0XFF);  
+		LCD_WR_REG(lcddev.setycmd+2);LCD_WR_DATA(theight>>8);   
+		LCD_WR_REG(lcddev.setycmd+3);LCD_WR_DATA(theight&0XFF);  
 	}else	//其他驱动IC
 	{
 		if(lcddev.dir==1)//横屏
 		{
 			//窗口值
 			hsaval=sy;				
-			heaval=height;
-			vsaval=lcddev.width-width-1;
+			heaval=theight;
+			vsaval=lcddev.width-twidth-1;
 			veaval=lcddev.width-sx-1;				
 		}else
 		{ 
 			hsaval=sx;				
-			heaval=width;
+			heaval=twidth;
 			vsaval=sy;
-			veaval=height;
-		}
-	 	if(lcddev.id==0X8989)//8989 IC
-		{
-			hsareg=0X44;heareg=0X44;//水平方向窗口寄存器 (1289的由一个寄存器控制)
-			hsaval|=(heaval<<8);	//得到寄存器值.
-			heaval=hsaval;
-			vsareg=0X45;veareg=0X46;//垂直方向窗口寄存器	  
-		}else  //其他驱动IC
-		{
-			hsareg=0X50;heareg=0X51;//水平方向窗口寄存器
-			vsareg=0X52;veareg=0X53;//垂直方向窗口寄存器	  
-		}								  
+			veaval=theight;
+		} 
+		hsareg=0X50;heareg=0X51;//水平方向窗口寄存器
+		vsareg=0X52;veareg=0X53;//垂直方向窗口寄存器	   							  
 		//设置寄存器值
 		LCD_WriteReg(hsareg,hsaval);
 		LCD_WriteReg(heareg,heaval);
@@ -595,165 +591,201 @@ void LCD_Set_Window(u16 sx,u16 sy,u16 width,u16 height)
 		LCD_WriteReg(veareg,veaval);		
 		LCD_SetCursor(sx,sy);	//设置光标位置
 	}
-} 
+}
 //初始化lcd
-//该初始化函数可以初始化各种ALIENTEK出品的LCD液晶屏
-//本函数占用较大flash,用户可以根据自己的实际情况,删掉未用到的LCD初始化代码.以节省空间.
+//该初始化函数可以初始化各种ILI93XX液晶,但是其他函数是基于ILI9320的!!!
+//在其他型号的驱动芯片上没有测试! 
 void LCD_Init(void)
-{ 
- 	RCC->APB2ENR|=1<<3;//先使能外设PORTB时钟
- 	RCC->APB2ENR|=1<<4;//先使能外设PORTC时钟
+{ 										  
+	RCC->AHBENR|=1<<8;     	 	//使能FSMC时钟	  
+  	RCC->APB2ENR|=1<<3;     	//使能PORTB时钟
+	RCC->APB2ENR|=1<<5;     	//使能PORTD时钟
+	RCC->APB2ENR|=1<<6;     	//使能PORTE时钟
+ 	RCC->APB2ENR|=1<<8;      	//使能PORTG时钟	 
+	GPIOB->CRL&=0XFFFFFFF0;		//PB0 推挽输出 背光
+	GPIOB->CRL|=0X00000003;	   
+	//PORTD复用推挽输出 	
+	GPIOD->CRH&=0X00FFF000;
+	GPIOD->CRH|=0XBB000BBB; 
+	GPIOD->CRL&=0XFF00FF00;
+	GPIOD->CRL|=0X00BB00BB;   	 
+	//PORTE复用推挽输出 	
+	GPIOE->CRH&=0X00000000;
+	GPIOE->CRH|=0XBBBBBBBB; 
+	GPIOE->CRL&=0X0FFFFFFF;
+	GPIOE->CRL|=0XB0000000;    	    	 											 
+	//PORTG12复用推挽输出 	    	 											 
+	GPIOG->CRH&=0XFFF0FFFF;
+	GPIOG->CRH|=0X000B0000; 
+	GPIOG->CRL&=0XFFFFFFF0;//PG0->RS
+	GPIOG->CRL|=0X0000000B;  
 
-	RCC->APB2ENR|=1<<0;    //开启辅助时钟
-	JTAG_Set(0x01);  //开启SWD
-											 
-	//PORTC6~10复用推挽输出 	
-	GPIOC->CRH&=0XFFFFF000;
-	GPIOC->CRH|=0X00000333; 
-	GPIOC->CRL&=0X00FFFFFF;
-	GPIOC->CRL|=0X33000000;  
-	GPIOC->ODR|=0X07C0; 	 
-	//PORTB 推挽输出 	
-	GPIOB->CRH=0X33333333;
-	GPIOB->CRL=0X33333333; 	 
-	GPIOB->ODR=0XFFFF;
-
-	delay_ms(50); // delay 50 ms 
-	LCD_WriteReg(0x0000,0x0001);
-	delay_ms(50); // delay 50 ms 
-  	lcddev.id = LCD_ReadReg(0x0000);   
-	if(lcddev.id<0XFF||lcddev.id==0XFFFF||lcddev.id==0X9300)//读到ID不正确,新增lcddev.id==0X9300判断，因为9341在未被复位的情况下会被读成9300
+	//寄存器清零
+	//bank1有NE1~4,每一个有一个BCR+TCR，所以总共八个寄存器。
+	//这里我们使用NE4 ，也就对应BTCR[6],[7]。				    
+	FSMC_Bank1->BTCR[6]=0X00000000;
+	FSMC_Bank1->BTCR[7]=0X00000000;
+	FSMC_Bank1E->BWTR[6]=0X00000000;
+	//操作BCR寄存器	使用异步模式
+	FSMC_Bank1->BTCR[6]|=1<<12;		//存储器写使能
+	FSMC_Bank1->BTCR[6]|=1<<14;		//读写使用不同的时序
+	FSMC_Bank1->BTCR[6]|=1<<4; 		//存储器数据宽度为16bit 	    
+	//操作BTR寄存器	
+	//读时序控制寄存器 							    
+	FSMC_Bank1->BTCR[7]|=0<<28;		//模式A 	 							  	 
+	FSMC_Bank1->BTCR[7]|=1<<0; 		//地址建立时间（ADDSET）为2个HCLK 1/36M=27ns(实际>200ns)	 	 
+	//因为液晶驱动IC的读数据的时候，速度不能太快，尤其对1289这个IC。
+	FSMC_Bank1->BTCR[7]|=0XF<<8;  	//数据保存时间为16个HCLK	 	 
+	//写时序控制寄存器  
+	FSMC_Bank1E->BWTR[6]|=0<<28; 	//模式A 	 							    
+	FSMC_Bank1E->BWTR[6]|=0<<0;		//地址建立时间（ADDSET）为1个HCLK 
+ 	//4个HCLK（HCLK=72M）因为液晶驱动IC的写信号脉宽，最少也得50ns。72M/4=24M=55ns  	 
+	FSMC_Bank1E->BWTR[6]|=3<<8; 	//数据保存时间为4个HCLK	
+	//使能BANK1,区域4
+	FSMC_Bank1->BTCR[6]|=1<<0;		//使能BANK1，区域4	
+	delay_ms(50); 					// delay 50 ms 
+  	lcddev.id=LCD_ReadReg(0x0000);	//读ID（9320/9325/9328/4531/4535等IC）   
+  	if(lcddev.id<0XFF||lcddev.id==0XFFFF||lcddev.id==0X9300)//读到ID不正确,新增lcddev.id==0X9300判断，因为9341在未被复位的情况下会被读成9300
 	{	
  		//尝试9341 ID的读取		
 		LCD_WR_REG(0XD3);				   
-		LCD_RD_DATA(); 				//dummy read 	
- 		LCD_RD_DATA();   	    	//读到0X00
+		lcddev.id=LCD_RD_DATA();	//dummy read 	
+ 		lcddev.id=LCD_RD_DATA();	//读到0X00
   		lcddev.id=LCD_RD_DATA();   	//读取93								   
  		lcddev.id<<=8;
 		lcddev.id|=LCD_RD_DATA();  	//读取41 	   			   
  		if(lcddev.id!=0X9341)		//非9341,尝试是不是6804
 		{	
  			LCD_WR_REG(0XBF);				   
-			LCD_RD_DATA(); 			//dummy read 	 
-	 		LCD_RD_DATA();   	    //读回0X01			   
-	 		LCD_RD_DATA(); 			//读回0XD0 			  	
-	  		lcddev.id=LCD_RD_DATA();//这里读回0X68 
+			lcddev.id=LCD_RD_DATA(); 	//dummy read 	 
+	 		lcddev.id=LCD_RD_DATA();   	//读回0X01			   
+	 		lcddev.id=LCD_RD_DATA(); 	//读回0XD0 			  	
+	  		lcddev.id=LCD_RD_DATA();	//这里读回0X68 
 			lcddev.id<<=8;
-	  		lcddev.id|=LCD_RD_DATA();//这里读回0X04	  
-			if(lcddev.id!=0X6804)	//也不是6804,尝试看看是不是NT35310
+	  		lcddev.id|=LCD_RD_DATA();	//这里读回0X04	  
+			if(lcddev.id!=0X6804)		//也不是6804,尝试看看是不是NT35310
 			{ 
 				LCD_WR_REG(0XD4);				   
-				LCD_RD_DATA(); 				//dummy read  
-				LCD_RD_DATA();   			//读回0X01	 
-				lcddev.id=LCD_RD_DATA();	//读回0X53	
+				lcddev.id=LCD_RD_DATA();//dummy read  
+				lcddev.id=LCD_RD_DATA();//读回0X01	 
+				lcddev.id=LCD_RD_DATA();//读回0X53	
 				lcddev.id<<=8;	 
 				lcddev.id|=LCD_RD_DATA();	//这里读回0X10	 
 				if(lcddev.id!=0X5310)		//也不是NT35310,尝试看看是不是NT35510
 				{
 					LCD_WR_REG(0XDA00);	
-					LCD_RD_DATA();   		//读回0X00	 
+					lcddev.id=LCD_RD_DATA();		//读回0X00	 
 					LCD_WR_REG(0XDB00);	
-					lcddev.id=LCD_RD_DATA();//读回0X80
+					lcddev.id=LCD_RD_DATA();		//读回0X80
 					lcddev.id<<=8;	
 					LCD_WR_REG(0XDC00);	
-					lcddev.id|=LCD_RD_DATA();//读回0X00		
+					lcddev.id|=LCD_RD_DATA();		//读回0X00		
 					if(lcddev.id==0x8000)lcddev.id=0x5510;//NT35510读回的ID是8000H,为方便区分,我们强制设置为5510
+					if(lcddev.id!=0X5510)			//也不是NT5510,尝试看看是不是SSD1963
+					{
+						LCD_WR_REG(0XA1);
+						lcddev.id=LCD_RD_DATA();
+						lcddev.id=LCD_RD_DATA();	//读回0X57
+						lcddev.id<<=8;	 
+						lcddev.id|=LCD_RD_DATA();	//读回0X61	
+						if(lcddev.id==0X5761)lcddev.id=0X1963;//SSD1963读回的ID是5761H,为方便区分,我们强制设置为1963
+					}
 				}
 			}
  		}  	
-	}
- 	printf(" LCD ID:%x\r\n",lcddev.id); //打印LCD ID  
+	} 
+ 	printf(" LCD ID:%x\r\n",lcddev.id); //打印LCD ID   
 	if(lcddev.id==0X9341)	//9341初始化
 	{	 
 		LCD_WR_REG(0xCF);  
-		LCD_WR_DATAX(0x00); 
-		LCD_WR_DATAX(0xC1); 
-		LCD_WR_DATAX(0X30); 
+		LCD_WR_DATA(0x00); 
+		LCD_WR_DATA(0xC1); 
+		LCD_WR_DATA(0X30); 
 		LCD_WR_REG(0xED);  
-		LCD_WR_DATAX(0x64); 
-		LCD_WR_DATAX(0x03); 
-		LCD_WR_DATAX(0X12); 
-		LCD_WR_DATAX(0X81); 
+		LCD_WR_DATA(0x64); 
+		LCD_WR_DATA(0x03); 
+		LCD_WR_DATA(0X12); 
+		LCD_WR_DATA(0X81); 
 		LCD_WR_REG(0xE8);  
-		LCD_WR_DATAX(0x85); 
-		LCD_WR_DATAX(0x10); 
-		LCD_WR_DATAX(0x7A); 
+		LCD_WR_DATA(0x85); 
+		LCD_WR_DATA(0x10); 
+		LCD_WR_DATA(0x7A); 
 		LCD_WR_REG(0xCB);  
-		LCD_WR_DATAX(0x39); 
-		LCD_WR_DATAX(0x2C); 
-		LCD_WR_DATAX(0x00); 
-		LCD_WR_DATAX(0x34); 
-		LCD_WR_DATAX(0x02); 
+		LCD_WR_DATA(0x39); 
+		LCD_WR_DATA(0x2C); 
+		LCD_WR_DATA(0x00); 
+		LCD_WR_DATA(0x34); 
+		LCD_WR_DATA(0x02); 
 		LCD_WR_REG(0xF7);  
-		LCD_WR_DATAX(0x20); 
+		LCD_WR_DATA(0x20); 
 		LCD_WR_REG(0xEA);  
-		LCD_WR_DATAX(0x00); 
-		LCD_WR_DATAX(0x00); 
+		LCD_WR_DATA(0x00); 
+		LCD_WR_DATA(0x00); 
 		LCD_WR_REG(0xC0);    //Power control 
-		LCD_WR_DATAX(0x1B);   //VRH[5:0] 
+		LCD_WR_DATA(0x1B);   //VRH[5:0] 
 		LCD_WR_REG(0xC1);    //Power control 
-		LCD_WR_DATAX(0x01);   //SAP[2:0];BT[3:0] 
+		LCD_WR_DATA(0x01);   //SAP[2:0];BT[3:0] 
 		LCD_WR_REG(0xC5);    //VCM control 
-		LCD_WR_DATAX(0x30); 	 //3F
-		LCD_WR_DATAX(0x30); 	 //3C
+		LCD_WR_DATA(0x30); 	 //3F
+		LCD_WR_DATA(0x30); 	 //3C
 		LCD_WR_REG(0xC7);    //VCM control2 
-		LCD_WR_DATAX(0XB7); 
+		LCD_WR_DATA(0XB7); 
 		LCD_WR_REG(0x36);    // Memory Access Control 
-		LCD_WR_DATAX(0x48); 
+		LCD_WR_DATA(0x48); 
 		LCD_WR_REG(0x3A);   
-		LCD_WR_DATAX(0x55); 
+		LCD_WR_DATA(0x55); 
 		LCD_WR_REG(0xB1);   
-		LCD_WR_DATAX(0x00);   
-		LCD_WR_DATAX(0x1A); 
+		LCD_WR_DATA(0x00);   
+		LCD_WR_DATA(0x1A); 
 		LCD_WR_REG(0xB6);    // Display Function Control 
-		LCD_WR_DATAX(0x0A); 
-		LCD_WR_DATAX(0xA2); 
+		LCD_WR_DATA(0x0A); 
+		LCD_WR_DATA(0xA2); 
 		LCD_WR_REG(0xF2);    // 3Gamma Function Disable 
-		LCD_WR_DATAX(0x00); 
+		LCD_WR_DATA(0x00); 
 		LCD_WR_REG(0x26);    //Gamma curve selected 
-		LCD_WR_DATAX(0x01); 
+		LCD_WR_DATA(0x01); 
 		LCD_WR_REG(0xE0);    //Set Gamma 
-		LCD_WR_DATAX(0x0F); 
-		LCD_WR_DATAX(0x2A); 
-		LCD_WR_DATAX(0x28); 
-		LCD_WR_DATAX(0x08); 
-		LCD_WR_DATAX(0x0E); 
-		LCD_WR_DATAX(0x08); 
-		LCD_WR_DATAX(0x54); 
-		LCD_WR_DATAX(0XA9); 
-		LCD_WR_DATAX(0x43); 
-		LCD_WR_DATAX(0x0A); 
-		LCD_WR_DATAX(0x0F); 
-		LCD_WR_DATAX(0x00); 
-		LCD_WR_DATAX(0x00); 
-		LCD_WR_DATAX(0x00); 
-		LCD_WR_DATAX(0x00); 		 
+		LCD_WR_DATA(0x0F); 
+		LCD_WR_DATA(0x2A); 
+		LCD_WR_DATA(0x28); 
+		LCD_WR_DATA(0x08); 
+		LCD_WR_DATA(0x0E); 
+		LCD_WR_DATA(0x08); 
+		LCD_WR_DATA(0x54); 
+		LCD_WR_DATA(0XA9); 
+		LCD_WR_DATA(0x43); 
+		LCD_WR_DATA(0x0A); 
+		LCD_WR_DATA(0x0F); 
+		LCD_WR_DATA(0x00); 
+		LCD_WR_DATA(0x00); 
+		LCD_WR_DATA(0x00); 
+		LCD_WR_DATA(0x00); 		 
 		LCD_WR_REG(0XE1);    //Set Gamma 
-		LCD_WR_DATAX(0x00); 
-		LCD_WR_DATAX(0x15); 
-		LCD_WR_DATAX(0x17); 
-		LCD_WR_DATAX(0x07); 
-		LCD_WR_DATAX(0x11); 
-		LCD_WR_DATAX(0x06); 
-		LCD_WR_DATAX(0x2B); 
-		LCD_WR_DATAX(0x56); 
-		LCD_WR_DATAX(0x3C); 
-		LCD_WR_DATAX(0x05); 
-		LCD_WR_DATAX(0x10); 
-		LCD_WR_DATAX(0x0F); 
-		LCD_WR_DATAX(0x3F); 
-		LCD_WR_DATAX(0x3F); 
-		LCD_WR_DATAX(0x0F); 
+		LCD_WR_DATA(0x00); 
+		LCD_WR_DATA(0x15); 
+		LCD_WR_DATA(0x17); 
+		LCD_WR_DATA(0x07); 
+		LCD_WR_DATA(0x11); 
+		LCD_WR_DATA(0x06); 
+		LCD_WR_DATA(0x2B); 
+		LCD_WR_DATA(0x56); 
+		LCD_WR_DATA(0x3C); 
+		LCD_WR_DATA(0x05); 
+		LCD_WR_DATA(0x10); 
+		LCD_WR_DATA(0x0F); 
+		LCD_WR_DATA(0x3F); 
+		LCD_WR_DATA(0x3F); 
+		LCD_WR_DATA(0x0F); 
 		LCD_WR_REG(0x2B); 
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x01);
-		LCD_WR_DATAX(0x3f);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x01);
+		LCD_WR_DATA(0x3f);
 		LCD_WR_REG(0x2A); 
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xef);	 
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xef);	 
 		LCD_WR_REG(0x11); //Exit Sleep
 		delay_ms(120);
 		LCD_WR_REG(0x29); //display on	
@@ -762,746 +794,746 @@ void LCD_Init(void)
 		LCD_WR_REG(0X11);
 		delay_ms(20);
 		LCD_WR_REG(0XD0);//VCI1  VCL  VGH  VGL DDVDH VREG1OUT power amplitude setting
-		LCD_WR_DATAX(0X07); 
-		LCD_WR_DATAX(0X42); 
-		LCD_WR_DATAX(0X1D); 
+		LCD_WR_DATA(0X07); 
+		LCD_WR_DATA(0X42); 
+		LCD_WR_DATA(0X1D); 
 		LCD_WR_REG(0XD1);//VCOMH VCOM_AC amplitude setting
-		LCD_WR_DATAX(0X00);
-		LCD_WR_DATAX(0X1a);
-		LCD_WR_DATAX(0X09); 
+		LCD_WR_DATA(0X00);
+		LCD_WR_DATA(0X1a);
+		LCD_WR_DATA(0X09); 
 		LCD_WR_REG(0XD2);//Operational Amplifier Circuit Constant Current Adjust , charge pump frequency setting
-		LCD_WR_DATAX(0X01);
-		LCD_WR_DATAX(0X22);
+		LCD_WR_DATA(0X01);
+		LCD_WR_DATA(0X22);
 		LCD_WR_REG(0XC0);//REV SM GS 
-		LCD_WR_DATAX(0X10);
-		LCD_WR_DATAX(0X3B);
-		LCD_WR_DATAX(0X00);
-		LCD_WR_DATAX(0X02);
-		LCD_WR_DATAX(0X11);
+		LCD_WR_DATA(0X10);
+		LCD_WR_DATA(0X3B);
+		LCD_WR_DATA(0X00);
+		LCD_WR_DATA(0X02);
+		LCD_WR_DATA(0X11);
 		
 		LCD_WR_REG(0XC5);// Frame rate setting = 72HZ  when setting 0x03
-		LCD_WR_DATAX(0X03);
+		LCD_WR_DATA(0X03);
 		
 		LCD_WR_REG(0XC8);//Gamma setting
-		LCD_WR_DATAX(0X00);
-		LCD_WR_DATAX(0X25);
-		LCD_WR_DATAX(0X21);
-		LCD_WR_DATAX(0X05);
-		LCD_WR_DATAX(0X00);
-		LCD_WR_DATAX(0X0a);
-		LCD_WR_DATAX(0X65);
-		LCD_WR_DATAX(0X25);
-		LCD_WR_DATAX(0X77);
-		LCD_WR_DATAX(0X50);
-		LCD_WR_DATAX(0X0f);
-		LCD_WR_DATAX(0X00);	  
+		LCD_WR_DATA(0X00);
+		LCD_WR_DATA(0X25);
+		LCD_WR_DATA(0X21);
+		LCD_WR_DATA(0X05);
+		LCD_WR_DATA(0X00);
+		LCD_WR_DATA(0X0a);
+		LCD_WR_DATA(0X65);
+		LCD_WR_DATA(0X25);
+		LCD_WR_DATA(0X77);
+		LCD_WR_DATA(0X50);
+		LCD_WR_DATA(0X0f);
+		LCD_WR_DATA(0X00);	  
 						  
    		LCD_WR_REG(0XF8);
-		LCD_WR_DATAX(0X01);	  
+		LCD_WR_DATA(0X01);	  
 
  		LCD_WR_REG(0XFE);
- 		LCD_WR_DATAX(0X00);
- 		LCD_WR_DATAX(0X02);
+ 		LCD_WR_DATA(0X00);
+ 		LCD_WR_DATA(0X02);
 		
 		LCD_WR_REG(0X20);//Exit invert mode
 
 		LCD_WR_REG(0X36);
-		LCD_WR_DATAX(0X08);//原来是a
+		LCD_WR_DATA(0X08);//原来是a
 		
 		LCD_WR_REG(0X3A);
-		LCD_WR_DATAX(0X55);//16位模式	  
+		LCD_WR_DATA(0X55);//16位模式	  
 		LCD_WR_REG(0X2B);
-		LCD_WR_DATAX(0X00);
-		LCD_WR_DATAX(0X00);
-		LCD_WR_DATAX(0X01);
-		LCD_WR_DATAX(0X3F);
+		LCD_WR_DATA(0X00);
+		LCD_WR_DATA(0X00);
+		LCD_WR_DATA(0X01);
+		LCD_WR_DATA(0X3F);
 		
 		LCD_WR_REG(0X2A);
-		LCD_WR_DATAX(0X00);
-		LCD_WR_DATAX(0X00);
-		LCD_WR_DATAX(0X01);
-		LCD_WR_DATAX(0XDF);
+		LCD_WR_DATA(0X00);
+		LCD_WR_DATA(0X00);
+		LCD_WR_DATA(0X01);
+		LCD_WR_DATA(0XDF);
 		delay_ms(120);
 		LCD_WR_REG(0X29); 	 
  	}else if(lcddev.id==0x5310)
-	{  
+	{ 
 		LCD_WR_REG(0xED);
-		LCD_WR_DATAX(0x01);
-		LCD_WR_DATAX(0xFE);
+		LCD_WR_DATA(0x01);
+		LCD_WR_DATA(0xFE);
 
 		LCD_WR_REG(0xEE);
-		LCD_WR_DATAX(0xDE);
-		LCD_WR_DATAX(0x21);
+		LCD_WR_DATA(0xDE);
+		LCD_WR_DATA(0x21);
 
 		LCD_WR_REG(0xF1);
-		LCD_WR_DATAX(0x01);
+		LCD_WR_DATA(0x01);
 		LCD_WR_REG(0xDF);
-		LCD_WR_DATAX(0x10);
+		LCD_WR_DATA(0x10);
 
 		//VCOMvoltage//
 		LCD_WR_REG(0xC4);
-		LCD_WR_DATAX(0x8F);	  //5f
+		LCD_WR_DATA(0x8F);	  //5f
 
 		LCD_WR_REG(0xC6);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xE2);
-		LCD_WR_DATAX(0xE2);
-		LCD_WR_DATAX(0xE2);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xE2);
+		LCD_WR_DATA(0xE2);
+		LCD_WR_DATA(0xE2);
 		LCD_WR_REG(0xBF);
-		LCD_WR_DATAX(0xAA);
+		LCD_WR_DATA(0xAA);
 
 		LCD_WR_REG(0xB0);
-		LCD_WR_DATAX(0x0D);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x0D);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x11);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x19);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x21);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x2D);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x3D);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x5D);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x5D);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x0D);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x0D);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x11);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x19);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x21);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x2D);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x3D);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x5D);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x5D);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xB1);
-		LCD_WR_DATAX(0x80);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x8B);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x96);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x80);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x8B);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x96);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xB2);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x02);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x03);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x02);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x03);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xB3);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xB4);
-		LCD_WR_DATAX(0x8B);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x96);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xA1);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x8B);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x96);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xA1);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xB5);
-		LCD_WR_DATAX(0x02);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x03);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x04);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x02);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x03);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x04);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xB6);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xB7);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x3F);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x5E);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x64);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x8C);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xAC);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xDC);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x70);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x90);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xEB);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xDC);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x3F);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x5E);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x64);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x8C);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xAC);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xDC);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x70);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x90);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xEB);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xDC);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xB8);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xBA);
-		LCD_WR_DATAX(0x24);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x24);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xC1);
-		LCD_WR_DATAX(0x20);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x54);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xFF);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x20);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x54);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xFF);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xC2);
-		LCD_WR_DATAX(0x0A);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x04);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x0A);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x04);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xC3);
-		LCD_WR_DATAX(0x3C);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x3A);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x39);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x37);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x3C);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x36);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x32);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x2F);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x2C);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x29);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x26);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x24);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x24);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x23);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x3C);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x36);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x32);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x2F);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x2C);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x29);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x26);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x24);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x24);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x23);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x3C);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x3A);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x39);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x37);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x3C);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x36);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x32);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x2F);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x2C);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x29);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x26);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x24);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x24);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x23);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x3C);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x36);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x32);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x2F);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x2C);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x29);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x26);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x24);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x24);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x23);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xC4);
-		LCD_WR_DATAX(0x62);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x05);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x84);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xF0);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x18);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xA4);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x18);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x50);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x0C);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x17);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x95);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xF3);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xE6);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x62);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x05);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x84);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xF0);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x18);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xA4);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x18);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x50);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x0C);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x17);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x95);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xF3);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xE6);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xC5);
-		LCD_WR_DATAX(0x32);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x44);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x65);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x76);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x88);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x32);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x44);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x65);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x76);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x88);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xC6);
-		LCD_WR_DATAX(0x20);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x17);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x01);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x20);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x17);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x01);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xC7);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xC8);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xC9);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xE0);
-		LCD_WR_DATAX(0x16);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x1C);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x21);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x36);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x46);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x52);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x64);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x7A);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x8B);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x99);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xA8);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xB9);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xC4);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xCA);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xD2);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xD9);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xE0);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xF3);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x16);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x1C);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x21);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x36);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x46);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x52);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x64);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x7A);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x8B);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x99);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xA8);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xB9);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xC4);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xCA);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xD2);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xD9);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xE0);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xF3);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xE1);
-		LCD_WR_DATAX(0x16);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x1C);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x22);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x36);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x45);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x52);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x64);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x7A);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x8B);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x99);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xA8);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xB9);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xC4);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xCA);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xD2);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xD8);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xE0);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xF3);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x16);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x1C);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x22);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x36);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x45);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x52);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x64);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x7A);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x8B);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x99);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xA8);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xB9);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xC4);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xCA);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xD2);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xD8);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xE0);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xF3);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xE2);
-		LCD_WR_DATAX(0x05);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x0B);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x1B);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x34);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x44);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x4F);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x61);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x79);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x88);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x97);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xA6);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xB7);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xC2);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xC7);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xD1);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xD6);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xDD);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xF3);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x05);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x0B);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x1B);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x34);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x44);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x4F);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x61);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x79);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x88);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x97);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xA6);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xB7);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xC2);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xC7);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xD1);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xD6);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xDD);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xF3);
+		LCD_WR_DATA(0x00);
 		LCD_WR_REG(0xE3);
-		LCD_WR_DATAX(0x05);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xA);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x1C);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x33);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x44);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x50);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x62);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x78);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x88);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x97);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xA6);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xB7);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xC2);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xC7);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xD1);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xD5);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xDD);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xF3);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x05);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xA);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x1C);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x33);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x44);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x50);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x62);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x78);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x88);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x97);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xA6);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xB7);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xC2);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xC7);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xD1);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xD5);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xDD);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xF3);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xE4);
-		LCD_WR_DATAX(0x01);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x01);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x02);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x2A);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x3C);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x4B);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x5D);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x74);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x84);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x93);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xA2);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xB3);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xBE);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xC4);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xCD);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xD3);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xDD);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xF3);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x01);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x01);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x02);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x2A);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x3C);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x4B);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x5D);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x74);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x84);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x93);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xA2);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xB3);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xBE);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xC4);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xCD);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xD3);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xDD);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xF3);
+		LCD_WR_DATA(0x00);
 		LCD_WR_REG(0xE5);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x02);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x29);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x3C);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x4B);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x5D);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x74);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x84);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x93);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xA2);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xB3);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xBE);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xC4);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xCD);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xD3);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xDC);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xF3);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x02);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x29);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x3C);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x4B);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x5D);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x74);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x84);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x93);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xA2);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xB3);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xBE);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xC4);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xCD);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xD3);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xDC);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xF3);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xE6);
-		LCD_WR_DATAX(0x11);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x34);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x56);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x76);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x77);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x66);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x88);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x99);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xBB);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x99);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x66);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x55);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x55);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x45);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x43);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x44);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x11);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x34);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x56);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x76);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x77);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x66);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x88);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x99);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xBB);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x99);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x66);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x55);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x55);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x45);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x43);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x44);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xE7);
-		LCD_WR_DATAX(0x32);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x55);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x76);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x66);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x67);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x67);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x87);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x99);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xBB);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x99);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x77);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x44);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x56);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x23); 
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x33);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x45);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x32);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x55);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x76);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x66);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x67);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x67);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x87);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x99);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xBB);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x99);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x77);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x44);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x56);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x23); 
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x33);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x45);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xE8);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x99);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x87);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x88);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x77);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x66);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x88);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xAA);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0xBB);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x99);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x66);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x55);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x55);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x44);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x44);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x55);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x99);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x87);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x88);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x77);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x66);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x88);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xAA);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0xBB);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x99);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x66);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x55);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x55);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x44);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x44);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x55);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xE9);
-		LCD_WR_DATAX(0xAA);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0xAA);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0x00);
-		LCD_WR_DATAX(0xAA);
+		LCD_WR_DATA(0xAA);
 
 		LCD_WR_REG(0xCF);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xF0);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x50);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x50);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xF3);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0xF9);
-		LCD_WR_DATAX(0x06);
-		LCD_WR_DATAX(0x10);
-		LCD_WR_DATAX(0x29);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x06);
+		LCD_WR_DATA(0x10);
+		LCD_WR_DATA(0x29);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0x3A);
-		LCD_WR_DATAX(0x55);	//66
+		LCD_WR_DATA(0x55);	//66
 
 		LCD_WR_REG(0x11);
 		delay_ms(100);
 		LCD_WR_REG(0x29);
 		LCD_WR_REG(0x35);
-		LCD_WR_DATAX(0x00);
+		LCD_WR_DATA(0x00);
 
 		LCD_WR_REG(0x51);
-		LCD_WR_DATAX(0xFF);
+		LCD_WR_DATA(0xFF);
 		LCD_WR_REG(0x53);
-		LCD_WR_DATAX(0x2C);
+		LCD_WR_DATA(0x2C);
 		LCD_WR_REG(0x55);
-		LCD_WR_DATAX(0x82);
-		LCD_WR_REG(0x2c); 
+		LCD_WR_DATA(0x82);
+		LCD_WR_REG(0x2c);
 	}else if(lcddev.id==0x5510)
 	{
 		LCD_WriteReg(0xF000,0x55);
@@ -2056,148 +2088,6 @@ void LCD_Init(void)
         LCD_WriteReg(0x0092,0x0600);  
         //开启显示设置    
         LCD_WriteReg(0x0007,0x0133); 
-	}else if(lcddev.id==0x9325)//9325
-	{
-		LCD_WriteReg(0x00E5,0x78F0); 
-		LCD_WriteReg(0x0001,0x0100); 
-		LCD_WriteReg(0x0002,0x0700); 
-		LCD_WriteReg(0x0003,0x1030); 
-		LCD_WriteReg(0x0004,0x0000); 
-		LCD_WriteReg(0x0008,0x0202);  
-		LCD_WriteReg(0x0009,0x0000);
-		LCD_WriteReg(0x000A,0x0000); 
-		LCD_WriteReg(0x000C,0x0000); 
-		LCD_WriteReg(0x000D,0x0000);
-		LCD_WriteReg(0x000F,0x0000);
-		//power on sequence VGHVGL
-		LCD_WriteReg(0x0010,0x0000);   
-		LCD_WriteReg(0x0011,0x0007);  
-		LCD_WriteReg(0x0012,0x0000);  
-		LCD_WriteReg(0x0013,0x0000); 
-		LCD_WriteReg(0x0007,0x0000); 
-		//vgh 
-		LCD_WriteReg(0x0010,0x1690);   
-		LCD_WriteReg(0x0011,0x0227);
-		//delayms(100);
-		//vregiout 
-		LCD_WriteReg(0x0012,0x009D); //0x001b
-		//delayms(100); 
-		//vom amplitude
-		LCD_WriteReg(0x0013,0x1900);
-		//delayms(100); 
-		//vom H
-		LCD_WriteReg(0x0029,0x0025); 
-		LCD_WriteReg(0x002B,0x000D); 
-		//gamma
-		LCD_WriteReg(0x0030,0x0007);
-		LCD_WriteReg(0x0031,0x0303);
-		LCD_WriteReg(0x0032,0x0003);// 0006
-		LCD_WriteReg(0x0035,0x0206);
-		LCD_WriteReg(0x0036,0x0008);
-		LCD_WriteReg(0x0037,0x0406); 
-		LCD_WriteReg(0x0038,0x0304);//0200
-		LCD_WriteReg(0x0039,0x0007); 
-		LCD_WriteReg(0x003C,0x0602);// 0504
-		LCD_WriteReg(0x003D,0x0008); 
-		//ram
-		LCD_WriteReg(0x0050,0x0000); 
-		LCD_WriteReg(0x0051,0x00EF);
-		LCD_WriteReg(0x0052,0x0000); 
-		LCD_WriteReg(0x0053,0x013F);  
-		LCD_WriteReg(0x0060,0xA700); 
-		LCD_WriteReg(0x0061,0x0001); 
-		LCD_WriteReg(0x006A,0x0000); 
-		//
-		LCD_WriteReg(0x0080,0x0000); 
-		LCD_WriteReg(0x0081,0x0000); 
-		LCD_WriteReg(0x0082,0x0000); 
-		LCD_WriteReg(0x0083,0x0000); 
-		LCD_WriteReg(0x0084,0x0000); 
-		LCD_WriteReg(0x0085,0x0000); 
-		//
-		LCD_WriteReg(0x0090,0x0010); 
-		LCD_WriteReg(0x0092,0x0600); 
-		
-		LCD_WriteReg(0x0007,0x0133);
-		LCD_WriteReg(0x00,0x0022);//
-	}else if(lcddev.id==0x9328)//ILI9328   OK  
-	{
-  		LCD_WriteReg(0x00EC,0x108F);// internal timeing      
- 		LCD_WriteReg(0x00EF,0x1234);// ADD        
-		//LCD_WriteReg(0x00e7,0x0010);      
-        //LCD_WriteReg(0x0000,0x0001);//开启内部时钟
-        LCD_WriteReg(0x0001,0x0100);     
-        LCD_WriteReg(0x0002,0x0700);//电源开启                    
-		//LCD_WriteReg(0x0003,(1<<3)|(1<<4) ); 	//65K  RGB
-		//DRIVE TABLE(寄存器 03H)
-		//BIT3=AM BIT4:5=ID0:1
-		//AM ID0 ID1   FUNCATION
-		// 0  0   0	   R->L D->U
-		// 1  0   0	   D->U	R->L
-		// 0  1   0	   L->R D->U
-		// 1  1   0    D->U	L->R
-		// 0  0   1	   R->L U->D
-		// 1  0   1    U->D	R->L
-		// 0  1   1    L->R U->D 正常就用这个.
-		// 1  1   1	   U->D	L->R
-        LCD_WriteReg(0x0003,(1<<12)|(3<<4)|(0<<3) );//65K    
-        LCD_WriteReg(0x0004,0x0000);                                   
-        LCD_WriteReg(0x0008,0x0202);	           
-        LCD_WriteReg(0x0009,0x0000);         
-        LCD_WriteReg(0x000a,0x0000);//display setting         
-        LCD_WriteReg(0x000c,0x0001);//display setting          
-        LCD_WriteReg(0x000d,0x0000);//0f3c          
-        LCD_WriteReg(0x000f,0x0000);
-		//电源配置
-        LCD_WriteReg(0x0010,0x0000);   
-        LCD_WriteReg(0x0011,0x0007);
-        LCD_WriteReg(0x0012,0x0000);                                                                 
-        LCD_WriteReg(0x0013,0x0000);                 
-     	LCD_WriteReg(0x0007,0x0001);                 
-       	delay_ms(50); 
-        LCD_WriteReg(0x0010,0x1490);   
-        LCD_WriteReg(0x0011,0x0227);
-        delay_ms(50); 
-        LCD_WriteReg(0x0012,0x008A);                  
-        delay_ms(50); 
-        LCD_WriteReg(0x0013,0x1a00);   
-        LCD_WriteReg(0x0029,0x0006);
-        LCD_WriteReg(0x002b,0x000d);
-        delay_ms(50); 
-        LCD_WriteReg(0x0020,0x0000);                                                            
-        LCD_WriteReg(0x0021,0x0000);           
-		delay_ms(50); 
-		//伽马校正
-        LCD_WriteReg(0x0030,0x0000); 
-        LCD_WriteReg(0x0031,0x0604);   
-        LCD_WriteReg(0x0032,0x0305);
-        LCD_WriteReg(0x0035,0x0000);
-        LCD_WriteReg(0x0036,0x0C09); 
-        LCD_WriteReg(0x0037,0x0204);
-        LCD_WriteReg(0x0038,0x0301);        
-        LCD_WriteReg(0x0039,0x0707);     
-        LCD_WriteReg(0x003c,0x0000);
-        LCD_WriteReg(0x003d,0x0a0a);
-        delay_ms(50); 
-        LCD_WriteReg(0x0050,0x0000); //水平GRAM起始位置 
-        LCD_WriteReg(0x0051,0x00ef); //水平GRAM终止位置                    
-        LCD_WriteReg(0x0052,0x0000); //垂直GRAM起始位置                    
-        LCD_WriteReg(0x0053,0x013f); //垂直GRAM终止位置  
- 
-         LCD_WriteReg(0x0060,0xa700);        
-        LCD_WriteReg(0x0061,0x0001); 
-        LCD_WriteReg(0x006a,0x0000);
-        LCD_WriteReg(0x0080,0x0000);
-        LCD_WriteReg(0x0081,0x0000);
-        LCD_WriteReg(0x0082,0x0000);
-        LCD_WriteReg(0x0083,0x0000);
-        LCD_WriteReg(0x0084,0x0000);
-        LCD_WriteReg(0x0085,0x0000);
-      
-        LCD_WriteReg(0x0090,0x0010);     
-        LCD_WriteReg(0x0092,0x0600);  
-        //开启显示设置    
-        LCD_WriteReg(0x0007,0x0133); 
 	}else if(lcddev.id==0x9320)//测试OK.
 	{
 		LCD_WriteReg(0x00,0x0000);
@@ -2353,7 +2243,8 @@ void LCD_Init(void)
 		LCD_WriteReg(0x95,0x0110);  //Frame Cycle Control
 		LCD_WriteReg(0x07,0x0173);		 
 		delay_ms(50);
-	}else if(lcddev.id==0x1505)//OK
+	}	
+	else if(lcddev.id==0x1505)//OK
 	{
 		// second release on 3/5  ,luminance is acceptable,water wave appear during camera preview
         LCD_WriteReg(0x0007,0x0000);
@@ -2526,6 +2417,8 @@ void LCD_Init(void)
 		LCD_WriteReg(0x0038,0x0001);
 		LCD_WriteReg(0x0039,0x0004);
 		
+		
+		
 		LCD_WriteReg(0x0090, 0x0015);	//80Hz
 		LCD_WriteReg(0x0010, 0X0410);	//BT,AP
 		LCD_WriteReg(0x0011,0x0247);	//DC1,DC0,VC
@@ -2556,49 +2449,6 @@ void LCD_Init(void)
  
  		LCD_WriteReg(0x0093, 0x0005);
 		LCD_WriteReg(0x0007, 0x0100);
-	}else if(lcddev.id==0x8989)//OK |/|/|
-	{	   
-		LCD_WriteReg(0x0000,0x0001);//打开晶振
-    	LCD_WriteReg(0x0003,0xA8A4);//0xA8A4
-    	LCD_WriteReg(0x000C,0x0000);    
-    	LCD_WriteReg(0x000D,0x080C);   
-    	LCD_WriteReg(0x000E,0x2B00);    
-    	LCD_WriteReg(0x001E,0x00B0);    
-    	LCD_WriteReg(0x0001,0x2B3F);//驱动输出控制320*240  0x6B3F
-    	LCD_WriteReg(0x0002,0x0600);
-    	LCD_WriteReg(0x0010,0x0000);  
-    	LCD_WriteReg(0x0011,0x6078); //定义数据格式  16位色 		横屏 0x6058
-    	LCD_WriteReg(0x0005,0x0000);  
-    	LCD_WriteReg(0x0006,0x0000);  
-    	LCD_WriteReg(0x0016,0xEF1C);  
-    	LCD_WriteReg(0x0017,0x0003);  
-    	LCD_WriteReg(0x0007,0x0233); //0x0233       
-    	LCD_WriteReg(0x000B,0x0000);  
-    	LCD_WriteReg(0x000F,0x0000); //扫描开始地址
-    	LCD_WriteReg(0x0041,0x0000);  
-    	LCD_WriteReg(0x0042,0x0000);  
-    	LCD_WriteReg(0x0048,0x0000);  
-    	LCD_WriteReg(0x0049,0x013F);  
-    	LCD_WriteReg(0x004A,0x0000);  
-    	LCD_WriteReg(0x004B,0x0000);  
-    	LCD_WriteReg(0x0044,0xEF00);  
-    	LCD_WriteReg(0x0045,0x0000);  
-    	LCD_WriteReg(0x0046,0x013F);  
-    	LCD_WriteReg(0x0030,0x0707);  
-    	LCD_WriteReg(0x0031,0x0204);  
-    	LCD_WriteReg(0x0032,0x0204);  
-    	LCD_WriteReg(0x0033,0x0502);  
-    	LCD_WriteReg(0x0034,0x0507);  
-    	LCD_WriteReg(0x0035,0x0204);  
-    	LCD_WriteReg(0x0036,0x0204);  
-    	LCD_WriteReg(0x0037,0x0502);  
-    	LCD_WriteReg(0x003A,0x0302);  
-    	LCD_WriteReg(0x003B,0x0302);  
-    	LCD_WriteReg(0x0023,0x0000);  
-    	LCD_WriteReg(0x0024,0x0000);  
-    	LCD_WriteReg(0x0025,0x8000);  
-    	LCD_WriteReg(0x004f,0);        //行首址0
-    	LCD_WriteReg(0x004e,0);        //列首址0
 	}else if(lcddev.id==0x4531)//OK |/|/|
 	{
 		LCD_WriteReg(0X00,0X0001);   
@@ -2685,12 +2535,83 @@ void LCD_Init(void)
 		LCD_WriteReg(0X07,0X0023);   
 		LCD_WriteReg(0X07,0X0033);   
 		LCD_WriteReg(0X07,0X0133);   
-	}	
-	LCD_Display_Dir(0);		 	//默认为竖屏
-	LCD_LED=1;					//点亮背光
+	}else if(lcddev.id==0X1963)
+	{
+		LCD_WR_REG(0xE2);		//Set PLL with OSC = 10MHz (hardware),	Multiplier N = 35, 250MHz < VCO < 800MHz = OSC*(N+1), VCO = 300MHz
+		LCD_WR_DATA(0x1D);		//参数1 
+		LCD_WR_DATA(0x02);		//参数2 Divider M = 2, PLL = 300/(M+1) = 100MHz
+		LCD_WR_DATA(0x04);		//参数3 Validate M and N values   
+		delay_us(100);
+		LCD_WR_REG(0xE0);		// Start PLL command
+		LCD_WR_DATA(0x01);		// enable PLL
+		delay_ms(10);
+		LCD_WR_REG(0xE0);		// Start PLL command again
+		LCD_WR_DATA(0x03);		// now, use PLL output as system clock	
+		delay_ms(12);  
+		LCD_WR_REG(0x01);		//软复位
+		delay_ms(10);
+		
+		LCD_WR_REG(0xE6);		//设置像素频率,33Mhz
+		LCD_WR_DATA(0x2F);
+		LCD_WR_DATA(0xFF);
+		LCD_WR_DATA(0xFF);
+		
+		LCD_WR_REG(0xB0);		//设置LCD模式
+		LCD_WR_DATA(0x20);		//24位模式
+		LCD_WR_DATA(0x00);		//TFT 模式 
+	
+		LCD_WR_DATA((SSD_HOR_RESOLUTION-1)>>8);//设置LCD水平像素
+		LCD_WR_DATA(SSD_HOR_RESOLUTION-1);		 
+		LCD_WR_DATA((SSD_VER_RESOLUTION-1)>>8);//设置LCD垂直像素
+		LCD_WR_DATA(SSD_VER_RESOLUTION-1);		 
+		LCD_WR_DATA(0x00);		//RGB序列 
+		
+		LCD_WR_REG(0xB4);		//Set horizontal period
+		LCD_WR_DATA((SSD_HT-1)>>8);
+		LCD_WR_DATA(SSD_HT-1);
+		LCD_WR_DATA(SSD_HPS>>8);
+		LCD_WR_DATA(SSD_HPS);
+		LCD_WR_DATA(SSD_HOR_PULSE_WIDTH-1);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		LCD_WR_REG(0xB6);		//Set vertical period
+		LCD_WR_DATA((SSD_VT-1)>>8);
+		LCD_WR_DATA(SSD_VT-1);
+		LCD_WR_DATA(SSD_VPS>>8);
+		LCD_WR_DATA(SSD_VPS);
+		LCD_WR_DATA(SSD_VER_FRONT_PORCH-1);
+		LCD_WR_DATA(0x00);
+		LCD_WR_DATA(0x00);
+		
+		LCD_WR_REG(0xF0);	//设置SSD1963与CPU接口为16bit  
+		LCD_WR_DATA(0x03);	//16-bit(565 format) data for 16bpp 
+
+		LCD_WR_REG(0x29);	//开启显示
+		//设置PWM输出  背光通过占空比可调 
+		LCD_WR_REG(0xD0);	//设置自动白平衡DBC
+		LCD_WR_DATA(0x00);	//disable
+	
+		LCD_WR_REG(0xBE);	//配置PWM输出
+		LCD_WR_DATA(0x05);	//1设置PWM频率
+		LCD_WR_DATA(0xFE);	//2设置PWM占空比
+		LCD_WR_DATA(0x01);	//3设置C
+		LCD_WR_DATA(0x00);	//4设置D
+		LCD_WR_DATA(0x00);	//5设置E 
+		LCD_WR_DATA(0x00);	//6设置F 
+		
+		LCD_WR_REG(0xB8);	//设置GPIO配置
+		LCD_WR_DATA(0x03);	//2个IO口设置成输出
+		LCD_WR_DATA(0x01);	//GPIO使用正常的IO功能 
+		LCD_WR_REG(0xBA);
+		LCD_WR_DATA(0X01);	//GPIO[1:0]=01,控制LCD方向
+		
+		LCD_SSD_BackLightSet(100);//背光设置为最亮
+	}		 
+	LCD_Display_Dir(0);		//默认为竖屏
+	LCD_LED=1;				//点亮背光
 	LCD_Clear(WHITE);
-}  		  
-  
+}  
 //清屏函数
 //color:要清屏的填充色
 void LCD_Clear(u16 color)
@@ -2708,12 +2629,14 @@ void LCD_Clear(u16 color)
   		lcddev.setxcmd=0X2B;
 		lcddev.setycmd=0X2A;  	 
  	}else LCD_SetCursor(0x00,0x0000);	//设置光标位置 
-	LCD_WriteRAM_Prepare();     		//开始写入GRAM	  	  
-	for(index=0;index<totalpoint;index++)LCD_WR_DATA(color);	
+	LCD_WriteRAM_Prepare();     		//开始写入GRAM	 	  
+	for(index=0;index<totalpoint;index++)
+	{
+		LCD->LCD_RAM=color;	
+	}
 }  
-//在指定区域内填充指定颜色
-//区域大小:(xend-xsta+1)*(yend-ysta+1)
-//xsta
+//在指定区域内填充单个颜色
+//(sx,sy),(ex,ey):填充矩形对角坐标,区域大小为:(ex-sx+1)*(ey-sy+1)   
 //color:要填充的颜色
 void LCD_Fill(u16 sx,u16 sy,u16 ex,u16 ey,u16 color)
 {          
@@ -2741,9 +2664,9 @@ void LCD_Fill(u16 sx,u16 sy,u16 ex,u16 ey,u16 color)
 		{
 		 	LCD_SetCursor(sx,i);      				//设置光标位置 
 			LCD_WriteRAM_Prepare();     			//开始写入GRAM	  
-			for(j=0;j<xlen;j++)LCD_WR_DATA(color);	//设置光标位置 	    
+			for(j=0;j<xlen;j++)LCD->LCD_RAM=color;	//显示颜色 	    
 		}
-	}
+	}	 
 }  
 //在指定区域内填充指定颜色块			 
 //(sx,sy),(ex,ey):填充矩形对角坐标,区域大小为:(ex-sx+1)*(ey-sy+1)   
@@ -2758,9 +2681,9 @@ void LCD_Color_Fill(u16 sx,u16 sy,u16 ex,u16 ey,u16 *color)
 	{
  		LCD_SetCursor(sx,sy+i);   	//设置光标位置 
 		LCD_WriteRAM_Prepare();     //开始写入GRAM
-		for(j=0;j<width;j++)LCD_WR_DATA(color[i*width+j]);//写入数据 
-	}	  
-} 
+		for(j=0;j<width;j++)LCD->LCD_RAM=color[i*width+j];//写入数据 
+	}		  
+}  
 //画线
 //x1,y1:起点坐标
 //x2,y2:终点坐标  
@@ -2769,7 +2692,6 @@ void LCD_DrawLine(u16 x1, u16 y1, u16 x2, u16 y2)
 	u16 t; 
 	int xerr=0,yerr=0,delta_x,delta_y,distance; 
 	int incx,incy,uRow,uCol; 
-
 	delta_x=x2-x1; //计算坐标增量 
 	delta_y=y2-y1; 
 	uRow=x1; 
@@ -2799,7 +2721,8 @@ void LCD_DrawLine(u16 x1, u16 y1, u16 x2, u16 y2)
 		} 
 	}  
 }    
-//画矩形
+//画矩形	  
+//(x1,y1),(x2,y2):矩形的对角坐标
 void LCD_DrawRectangle(u16 x1, u16 y1, u16 x2, u16 y2)
 {
 	LCD_DrawLine(x1,y1,x2,y1);
@@ -2818,15 +2741,14 @@ void LCD_Draw_Circle(u16 x0,u16 y0,u8 r)
 	di=3-(r<<1);             //判断下个点位置的标志
 	while(a<=b)
 	{
-		LCD_DrawPoint(x0-b,y0-a);             //3           
-		LCD_DrawPoint(x0+b,y0-a);             //0           
-		LCD_DrawPoint(x0-a,y0+b);             //1       
-		LCD_DrawPoint(x0-b,y0-a);             //7           
-		LCD_DrawPoint(x0-a,y0-b);             //2             
-		LCD_DrawPoint(x0+b,y0+a);             //4               
 		LCD_DrawPoint(x0+a,y0-b);             //5
+ 		LCD_DrawPoint(x0+b,y0-a);             //0           
+		LCD_DrawPoint(x0+b,y0+a);             //4               
 		LCD_DrawPoint(x0+a,y0+b);             //6 
-		LCD_DrawPoint(x0-b,y0+a);             
+		LCD_DrawPoint(x0-a,y0+b);             //1       
+ 		LCD_DrawPoint(x0-b,y0+a);             
+		LCD_DrawPoint(x0-a,y0-b);             //2             
+  		LCD_DrawPoint(x0-b,y0-a);             //7     	         
 		a++;
 		//使用Bresenham算法画圆     
 		if(di<0)di +=4*a+6;	  
@@ -2834,29 +2756,26 @@ void LCD_Draw_Circle(u16 x0,u16 y0,u8 r)
 		{
 			di+=10+4*(a-b);   
 			b--;
-		} 
-		LCD_DrawPoint(x0+a,y0+b);
+		} 						    
 	}
-}								  
+} 									  
 //在指定位置显示一个字符
 //x,y:起始坐标
 //num:要显示的字符:" "--->"~"
-//size:字体大小 16/24/32
+//size:字体大小 12/16/24
 //mode:叠加方式(1)还是非叠加方式(0)
 void LCD_ShowChar(u16 x,u16 y,u8 num,u8 size,u8 mode)
 {  							  
     u8 temp,t1,t;
 	u16 y0=y;
 	u8 csize=(size/8+((size%8)?1:0))*(size/2);		//得到字体一个字符对应点阵集所占的字节数	
-	//设置窗口		   
-	num=num-' ';//得到偏移后的值
+ 	num=num-' ';//得到偏移后的值（ASCII字库是从空格开始取模，所以-' '就是对应字符的字库）
 	for(t=0;t<csize;t++)
 	{   
 		//if(size==12)temp=asc2_1206[num][t]; 	 	//调用1206字体
 		 if(size==16)temp=asc2_1608[num][t];	//调用1608字体
 		else if(size==24)temp=asc2_2412[num][t];	//调用2412字体
 		else if(size==32)temp=asc2_3216[num][t];	//调用3216字体
-		
 		else return;								//没有的字库
 		for(t1=0;t1<8;t1++)
 		{			    
@@ -2864,7 +2783,7 @@ void LCD_ShowChar(u16 x,u16 y,u8 num,u8 size,u8 mode)
 			else if(mode==0)LCD_Fast_DrawPoint(x,y,BACK_COLOR);
 			temp<<=1;
 			y++;
-			if(x>=lcddev.width)return;		//超区域了
+			if(y>=lcddev.height)return;		//超区域了
 			if((y-y0)==size)
 			{
 				y=y0;
@@ -2873,7 +2792,7 @@ void LCD_ShowChar(u16 x,u16 y,u8 num,u8 size,u8 mode)
 				break;
 			}
 		}  	 
-	}  	
+	}  	    	   	 	  
 }   
 //m^n函数
 //返回值:m^n次方.
@@ -2956,6 +2875,13 @@ void LCD_ShowString(u16 x,u16 y,u16 width,u16 height,u8 size,u8 *p)
         p++;
     }  
 }
+
+
+
+
+
+
+
 
 
 

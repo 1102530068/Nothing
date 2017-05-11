@@ -3,23 +3,29 @@
 #include "usart.h"
 
 //////////////////////////////////////////////////////////////////////////////////	 
-float v=0;
+float V=0;
+u16 V_RPM=0;
+ u16 signal_sum=0;
+ u16 quanshu_tenfold=0;		//圈数的十倍
  extern u16 signal;
- unsigned char signal_sum=0;
- unsigned int quanshu_tenfold=0;		//圈数的十倍
-//定时器3中断服务程序	 
+ extern u16 signal_RPM;
+ 
+//定时器3中断服务程序	 0.5s进一次  计算车速和转速
 void TIM3_IRQHandler(void)
-{ 		    		  			    
+{ 		 
 	if(TIM3->SR&0X0001)//溢出中断
-	{
-			v=signal*1.8;		//速度转化
-			signal_sum+=signal;
-		if(signal_sum>=60)		//注意！！！这里是一圈6个信号来设置的  需要更改
+	{		
+		V=signal*0.9;					//速度转换 Km/h   和实际相差一倍 需要/2
+		V_RPM=signal_RPM*15;	//转速转换 r/min		需要*2   //W T F
+		signal_sum+=signal;
+		if(signal_sum>=120)			//刹车盘一圈12个信号
 		{
 			quanshu_tenfold++;
-			signal_sum=0;
+			signal_sum %= 120;	//留下不足120的部分
 		}
-			signal=0;
+		printf("%d    V=%f    V_RPM=%d \n",signal,V,V_RPM);
+		signal=0;
+		signal_RPM=0;
 	}				   
 	TIM3->SR&=~(1<<0);//清除中断标志位 	    
 }

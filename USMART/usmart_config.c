@@ -2,12 +2,12 @@
 #include "usmart_str.h"
 ////////////////////////////用户配置区///////////////////////////////////////////////
 //这下面要包含所用到的函数所申明的头文件(用户自己添加) 
-#include "delay.h"	
-#include "usart.h"		
+#include "delay.h"	 	
 #include "sys.h"
-#include "rtc.h" 
 #include "lcd.h"
-
+												 
+//extern void led_set(u8 sta);
+//extern void test_fun(void(*ledset)(u8),u8 sta);
 //函数名列表初始化(用户自己添加)
 //用户直接在这里输入要执行的函数名及其查找串
 struct _m_usmart_nametab usmart_nametab[]=
@@ -17,19 +17,20 @@ struct _m_usmart_nametab usmart_nametab[]=
 	(void*)write_addr,"void write_addr(u32 addr,u32 val)",	 
 #endif		   
 	(void*)delay_ms,"void delay_ms(u16 nms)",
- 	(void*)delay_us,"void delay_us(u32 nus)",	
-		
- 	(void*) RTC_Set,"u8 RTC_Set(u16 syear,u8 smon,u8 sday,u8 hour,u8 min,u8 sec)	",
-	(void*) LCD_Draw_Circle,"LCD_Draw_Circle(u16 x0,u16 y0,u8 r)",					    					//画圆
-	(void*) LCD_DrawLine,"LCD_DrawLine(u16 x1, u16 y1, u16 x2, u16 y2)",							//画线
-	(void*) LCD_DrawRectangle,"LCD_DrawRectangle(u16 x1, u16 y1, u16 x2, u16 y2);",		   		//画矩形
-	(void*) LCD_Fill,"LCD_Fill(u16 sx,u16 sy,u16 ex,u16 ey,u16 color)",		   				//填充单色
-	(void*) LCD_ShowChar ,"LCD_ShowChar(u16 x,u16 y,u8 num,u8 size,u8 mode)",
-	(void*) LCD_ShowxNum,"LCD_ShowxNum(u16 x,u16 y,u32 num,u8 len,u8 size,u8 mode)",
-	(void*) LCD_ShowString,"LCD_ShowString(u16 x,u16 y,u16 width,u16 height,u8 size,u8 *p)",
-	(void*) LCD_Color_Fill ,"LCD_Color_Fill(u16 sx,u16 sy,u16 ex,u16 ey,u16 *color)",
-	(void*) LCD_Clear,"LCD_Clear(u16 Color)",
-	(u8*) RTC_Set,"RTC_Set(u16 syear,u8 smon,u8 sday,u8 hour,u8 min,u8 sec);",
+ 	(void*)delay_us,"void delay_us(u32 nus)",	 
+	(void*)LCD_Clear,"void LCD_Clear(u16 Color)",
+	(void*)LCD_Fill,"void LCD_Fill(u16 xsta,u16 ysta,u16 xend,u16 yend,u16 color)",
+	(void*)LCD_DrawLine,"void LCD_DrawLine(u16 x1, u16 y1, u16 x2, u16 y2)",
+	(void*)LCD_DrawRectangle,"void LCD_DrawRectangle(u16 x1, u16 y1, u16 x2, u16 y2)",
+	(void*)LCD_Draw_Circle,"void Draw_Circle(u16 x0,u16 y0,u8 r)",
+	(void*)LCD_ShowNum,"void LCD_ShowNum(u16 x,u16 y,u32 num,u8 len,u8 size)",
+	(void*)LCD_ShowString,"void LCD_ShowString(u16 x,u16 y,u16 width,u16 height,u8 size,u8 *p)",
+	(void*)LCD_Fast_DrawPoint,"void LCD_Fast_DrawPoint(u16 x,u16 y,u16 color)",
+	(void*)LCD_ReadPoint,"u16 LCD_ReadPoint(u16 x,u16 y)",							 
+	(void*)LCD_Display_Dir,"void LCD_Display_Dir(u8 dir)",
+	(void*)LCD_ShowxNum,"void LCD_ShowxNum(u16 x,u16 y,u32 num,u8 len,u8 size,u8 mode)",
+	//(void*)led_set,"void led_set(u8 sta)",
+	//(void*)test_fun,"void test_fun(void(*ledset)(u8),u8 sta)",				  	    
 };						  
 ///////////////////////////////////END///////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////////
@@ -51,3 +52,22 @@ struct _m_usmart_dev usmart_dev=
 	0,	  	//每个参数的长度暂存表,需要MAX_PARM个0初始化
 	0,		//函数的参数,需要PARM_LEN个0初始化
 };   
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
